@@ -1,6 +1,6 @@
 {
-  "name": "수업 캘린더",
-  "short_name": "수업캘린더",
+  "name": "세션 캘린더",
+  "short_name": "세션캘린더",
   "description": "트레이너용 수업 일정 관리 앱",
   "lang": "ko",
   "start_url": "./",

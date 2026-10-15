@@ -2449,8 +2449,8 @@ body { margin: 0; }
     signEv = null; signEnrId = enr.id; $('#sign-noshow').hidden = true;
     $('#sign-title').textContent = '강습 확인 사인';
     $('#sign-who').innerHTML = '<p class="sname">' + esc(enr.name) + ' 회원님</p>' +
-      '<div class="scard"><div class="crow"><span>' + Number(enr.month.slice(5)) + '월 강습 횟수</span><b>' + enrCount(enr) + '회</b></div>' +
-      (enrNoshow(enr) ? '<div class="crow"><span>그중 노쇼</span><b>' + enrNoshow(enr) + '회</b></div>' : '') + '<div class="crow"><span>강습료</span><b>' + fmt(enrFee(enr)) + '원</b></div></div>' +
+      '<div class="scard"><div class="crow"><span>총 ' + Number(enr.month.slice(5)) + '월 강습 횟수</span><b>' + enrCount(enr) + '회</b></div>' +
+      (enrNoshow(enr) ? '<div class="crow"><span>노쇼 횟수</span><b>' + enrNoshow(enr) + '회</b></div>' : '') + '<div class="crow"><span>강습료</span><b>' + fmt(enrFee(enr)) + '원</b></div></div>' +
       '<p class="sask">위 내용이 맞으면 아래 칸에 사인해 주세요.</p>';
     openPad();
   }

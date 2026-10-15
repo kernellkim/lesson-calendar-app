@@ -69,7 +69,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .month { font-family: var(--f-display); font-size: calc(var(--u) * 1.875); line-height: 1.2; margin: 0; letter-spacing: 0.01em; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 380px) { .month { font-size: calc(var(--u) * 1.625); } .head { gap: calc(var(--u) * 0.5); } .head-r { gap: calc(var(--u) * 0.25); } }
 .sync { margin: 2px 0 0; font-size: calc(var(--u) * 0.75); color: var(--text-muted); }
-.sync.warn { color: var(--accent-text); }
 .head-r { display: flex; gap: calc(var(--u) * 0.375); align-items: center; }
 .ibtn {
   flex: none; width: max(44px, calc(var(--u) * 2.5)); height: max(44px, calc(var(--u) * 2.5)); border-radius: calc(var(--u) * 0.375); border: 1px solid var(--border);
@@ -298,8 +297,6 @@ body { margin: 0; }
 .enr-main { flex: 1; min-width: 0; display: flex; gap: calc(var(--u) * 0.75); align-items: center; text-align: left; background: none; border: 0; padding: calc(var(--u) * 0.75) calc(var(--u) * 0.5) calc(var(--u) * 0.75) calc(var(--u) * 0.75); }
 .unit { flex: none; min-width: calc(var(--u) * 3.125); max-width: calc(var(--u) * 4.5); overflow-wrap: anywhere; font-weight: 600; font-size: calc(var(--u) * 0.875); line-height: 1.25; font-variant-numeric: tabular-nums; }
 .unit small { display: block; font-weight: 500; font-size: calc(var(--u) * 0.8125); color: var(--text-muted); }
-.pill.info { background: var(--accent-soft); color: var(--text); }
-.pill.warn { background: var(--border); color: var(--text-muted); }
 .csign { flex: none; width: calc(var(--u) * 4.75); padding: calc(var(--u) * 0.25); background: none; border: 0; border-left: 1px solid var(--border); color: var(--text-muted); font: inherit; font-size: calc(var(--u) * 0.75); font-weight: 600; line-height: 1.3; }
 .csign.ok { color: var(--text-muted); }
 .csign.stale { color: var(--accent-text); }

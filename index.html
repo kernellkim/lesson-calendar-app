@@ -565,6 +565,7 @@ body { margin: 0; }
     <div class="sactions">
       <button type="button" class="btn primary" id="sign-ok">사인 완료</button>
       <div class="ssec">
+        <button type="button" class="btn" id="sign-noshow">노쇼</button>
         <button type="button" class="btn" id="sign-clear">지우기</button>
         <button type="button" class="btn" id="sign-cancel">닫기</button>
       </div>
@@ -1025,7 +1026,7 @@ body { margin: 0; }
     }
     $('#list').innerHTML = list.map(function (e) {
       var st = e.status || 'scheduled';
-      var pill = st === 'done' ? '<span class="pill done">완료</span>' : st === 'cancelled' ? '<span class="pill cancelled">취소</span>' : '';
+      var pill = st === 'done' ? '<span class="pill done">' + (e.noshow ? '노쇼' : '완료') + '</span>' : st === 'cancelled' ? '<span class="pill cancelled">취소</span>' : '';
       return '<li class="lesson hh st-' + st + '" style="' + hh(lessonKey(e)) + '">' +
         '<span class="bar"></span>' +
         '<button type="button" class="lesson-main" data-edit="' + esc(e.id) + '">' +
@@ -1229,6 +1230,7 @@ body { margin: 0; }
         var upd = { id: state.editing, title: mem.name, memberId: mem.id, date: date, start: start, end: end, memo: memo, status: st };
         if (old.enrollmentId) upd.enrollmentId = old.enrollmentId;
         if (old.sign && st === 'done') upd.sign = old.sign;
+        if (old.noshow && st === 'done') upd.noshow = true;
         var after = [];
         if (old.id && (old.start !== start || old.end !== end)) {
           // later lessons on the same weekday, still unsigned
@@ -1652,8 +1654,8 @@ body { margin: 0; }
       var ev = state.events.find(function (x) { return x.id === id; });
       if (!ev) return;
       if (ev.status === 'done') {
-        if (!await ask('사인 삭제', ev.title + ' ' + longDate(ev.date) + ' 사인을 지우고 예정으로 되돌릴까요?', '사인 삭제')) return;
-        var back = Object.assign({}, ev, { status: 'scheduled' }); delete back.sign;
+        if (!await ask(ev.noshow ? '노쇼 취소' : '사인 삭제', ev.title + ' ' + longDate(ev.date) + (ev.noshow ? ' 노쇼를 취소하고' : ' 사인을 지우고') + ' 예정으로 되돌릴까요?', ev.noshow ? '노쇼 취소' : '사인 삭제')) return;
+        var back = Object.assign({}, ev, { status: 'scheduled' }); delete back.sign; delete back.noshow;
         await put(back);
       } else openSign(ev);
       return;
@@ -1712,6 +1714,7 @@ body { margin: 0; }
   }
   // Count = lessons the member has signed (status done); fee = per-lesson price x count
   function signedLessons(enr) { return lessonsFor(enr).filter(function (l) { return l.status === 'done'; }); }
+  function enrNoshow(enr) { return signedLessons(enr).filter(function (l) { return l.noshow; }).length; }   // counted and billed like a held lesson
   function enrCount(enr) { return signedLessons(enr).length; }
   // each lesson is priced by its own calendar length, not the enrollment's default time
   function enrFee(enr) { return signedLessons(enr).reduce(function (sum, l) { return sum + unitFee(toMin(l.end) - toMin(l.start)); }, 0); }
@@ -2271,7 +2274,7 @@ body { margin: 0; }
     var body = '';
     for (var i = 0; i < 11; i++) {
       var l = rows[i];
-      body += '<tr><td class="n">' + (from + i + 1) + '</td><td>' + (l ? esc(longDate(l.date)) : '') + '</td><td>' + (l ? esc(l.start + ' ~ ' + l.end) : '') + '</td><td>' + (l && validSign(l.sign) ? '<svg class="sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + l.sign + '"/></svg>' : '') + '</td></tr>';
+      body += '<tr><td class="n">' + (from + i + 1) + '</td><td>' + (l ? esc(longDate(l.date)) : '') + '</td><td>' + (l ? esc(l.start + ' ~ ' + l.end) : '') + '</td><td>' + (l && l.noshow ? 'N/S' : l && validSign(l.sign) ? '<svg class="sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + l.sign + '"/></svg>' : '') + '</td></tr>';
     }
     return '<div class="pf">' +
       '<h3 class="pt" style="letter-spacing:0.05em">선생님 보관용</h3>' +
@@ -2443,16 +2446,16 @@ body { margin: 0; }
     return strokes.map(function (st) { return st.map(function (p) { return [Math.round(p[0] * k + ox), Math.round(p[1] * k + oy)]; }); });
   }
   function openConfirmSign(enr) {
-    signEv = null; signEnrId = enr.id;
+    signEv = null; signEnrId = enr.id; $('#sign-noshow').hidden = true;
     $('#sign-title').textContent = '강습 확인 사인';
     $('#sign-who').innerHTML = '<p class="sname">' + esc(enr.name) + ' 회원님</p>' +
       '<div class="scard"><div class="crow"><span>' + Number(enr.month.slice(5)) + '월 강습 횟수</span><b>' + enrCount(enr) + '회</b></div>' +
-      '<div class="crow"><span>강습료</span><b>' + fmt(enrFee(enr)) + '원</b></div></div>' +
+      (enrNoshow(enr) ? '<div class="crow"><span>그중 노쇼</span><b>' + enrNoshow(enr) + '회</b></div>' : '') + '<div class="crow"><span>강습료</span><b>' + fmt(enrFee(enr)) + '원</b></div></div>' +
       '<p class="sask">위 내용이 맞으면 아래 칸에 사인해 주세요.</p>';
     openPad();
   }
   function openSign(ev) {
-    signEv = ev; signEnrId = null; strokes = [];
+    signEv = ev; signEnrId = null; strokes = []; $('#sign-noshow').hidden = false;
     $('#sign-title').textContent = '회원 사인';
     $('#sign-who').innerHTML = '<p class="sname">' + esc(ev.title) + ' 회원님</p>' +
       '<p class="sask">' + esc(longDate(ev.date) + ' ' + ev.start + ' ~ ' + ev.end) + ' 수업</p>' +
@@ -2465,6 +2468,13 @@ body { margin: 0; }
   cv.addEventListener('pointermove', function (e) { if (!strokes.length || !cv.hasPointerCapture(e.pointerId)) return; var s = strokes[strokes.length - 1], p = padXY(e), q = s[s.length - 1]; if (p[0] !== q[0] || p[1] !== q[1]) { s.push(p); padDraw(); } });
   $('#sign-clear').addEventListener('click', function () { strokes = []; padDraw(); });
   $('#sign-cancel').addEventListener('click', closeSign);
+  // no-show: no signature, the lesson is marked done (so it counts and is billed) with noshow:true
+  $('#sign-noshow').addEventListener('click', async function () {
+    var ev = signEv; if (!ev) return;
+    if (!await ask('노쇼 처리', ev.title + ' ' + longDate(ev.date) + ' 수업을 노쇼로 처리할까요? 수업 1회로 계산돼요.', '노쇼 처리')) return;
+    closeSign();
+    await put(Object.assign({}, ev, { status: 'done', noshow: true }));
+  });
   $('#sign-ok').addEventListener('click', async function () {
     if (!strokes.length) { toast('먼저 사인해 주세요'); return; }
     var d = fitStrokes().map(function (s) { return 'M' + s[0].join(' ') + s.slice(1).map(function (p) { return 'L' + p.join(' '); }).join('') + (s.length === 1 ? 'L' + (s[0][0] + 1) + ' ' + s[0][1] : ''); }).join('');
@@ -2524,6 +2534,7 @@ body { margin: 0; }
         if (e.enrollmentId) o.enrollmentId = e.enrollmentId;
         if (typeof e.memberId === 'string' && e.memberId) o.memberId = e.memberId;
         if (validSign(e.sign)) o.sign = e.sign;
+        if (e.noshow === true) o.noshow = true;
         byId[e.id] = o;
       });
       state.events = Object.keys(byId).map(function (k) { return byId[k]; });

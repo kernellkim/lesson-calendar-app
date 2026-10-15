@@ -505,6 +505,7 @@ body { margin: 0; }
 <div class="selbar" id="selbar" hidden>
   <button type="button" class="btn" id="sel-all">전체 선택</button>
   <span id="sel-count">0건 선택</span>
+  <button type="button" class="btn" id="sel-print">출력</button>
   <button type="button" class="btn danger" id="sel-del">삭제</button>
 </div>
 <div class="toast upd" id="undo" role="status" hidden><span id="undo-text"></span><button type="button" id="undo-btn">되돌리기</button></div>
@@ -1853,7 +1854,7 @@ body { margin: 0; }
     });
     var n = Object.keys(sel.ids).length, total = enrOfMonth(sel.key).length;
     $('#sel-count').textContent = n + '건 선택';
-    $('#sel-del').disabled = !n;
+    $('#sel-del').disabled = !n; $('#sel-print').disabled = !n;
     $('#sel-all').textContent = n && n === total ? '선택 해제' : '전체 선택';
   }
   // What deleting these enrollments removes: the 신청서, their unsigned (scheduled) lessons, never signed ones.
@@ -1938,6 +1939,12 @@ body { margin: 0; }
     updateSelUI();
   });
   $('#sel-del').addEventListener('click', deleteSelected);
+  // print the 신청서·사인지 of every selected enrollment in one go (list order = 동/호 order)
+  $('#sel-print').addEventListener('click', function () {
+    var list = enrOfMonth(sel.key).filter(function (e) { return sel.ids[e.id]; }), pages = [];
+    list.forEach(function (e) { pages = pages.concat(signPages(e)); });
+    if (pages.length) openPreview('신청서·사인지 · ' + list.length + '명', pages, true);
+  });
 
   /* ---- enrollment sheet ---- */
   var eState = { editing: null, periodDirty: false, edur: 50, slots: {}, date: null };   // date: set when a new lesson is added from the calendar

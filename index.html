@@ -1374,8 +1374,91 @@ body { margin: 0; }
   function shiftMonth(n) { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + n, 1); render(); }
   function shiftWeek(n) { state.selected = addDays(state.selected, 7 * n); var d = parse(state.selected); state.month = new Date(d.getFullYear(), d.getMonth(), 1); render(); }
   function shiftView(n) { if (isWeek()) shiftWeek(n); else shiftMonth(n); }
-  $('#prev').addEventListener('click', function () { shiftView(-1); });
-  $('#next').addEventListener('click', function () { shiftView(1); });
+  /* ---------- smooth slide between months / weeks ----------
+     slide(): the old grid slides out, the view changes, the new grid slides in from the other side.
+     attachSwipe(): the grid follows the finger while swiping and settles (or springs back) on release. */
+  var slideBusy = false;
+  var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+  function slideClear(el) { el.style.transition = ''; el.style.transform = ''; el.style.opacity = ''; el.style.willChange = ''; }
+  function slide(el, dir, change) {   // dir: 1 = next (content moves left), -1 = previous
+    if (slideBusy) return;
+    if (reduceMotion.matches) { change(); return; }
+    var w = el.clientWidth || 300;
+    slideBusy = true;
+    el.style.willChange = 'transform, opacity';
+    el.style.transition = 'transform 140ms ease-in, opacity 140ms ease-in';
+    el.style.transform = 'translate3d(' + (-dir * w * 0.4) + 'px,0,0)';
+    el.style.opacity = '0';
+    setTimeout(function () {
+      change();
+      el.style.transition = 'none';
+      el.style.transform = 'translate3d(' + (dir * w * 0.4) + 'px,0,0)';
+      el.style.opacity = '0';
+      void el.offsetWidth;   // apply the start position before animating
+      el.style.transition = 'transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease-out';
+      el.style.transform = 'translate3d(0,0,0)';
+      el.style.opacity = '1';
+      setTimeout(function () { slideClear(el); slideBusy = false; }, 240);
+    }, 140);
+  }
+  function viewMover() { return isWeek() ? $('#wk-scroll') : $('#days'); }
+  function slideView(n) { slide(viewMover(), n, function () { shiftView(n); }); }
+  function attachSwipe(host, getMover, shift, blocked) {
+    var st = null;
+    host.addEventListener('touchstart', function (e) {
+      st = (e.touches.length === 1 && !slideBusy) ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now(), mode: null, dx: 0 } : null;
+    }, { passive: true });
+    host.addEventListener('touchmove', function (e) {
+      if (!st) return;
+      var dx = e.touches[0].clientX - st.x, dy = e.touches[0].clientY - st.y;
+      if (st.mode === null) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        st.mode = (Math.abs(dx) > 1.5 * Math.abs(dy) && !(blocked && blocked())) ? 'x' : 'y';   // mostly vertical = scrolling
+      }
+      if (st.mode !== 'x' || reduceMotion.matches) return;
+      st.dx = dx;
+      var el = getMover();
+      el.style.transition = 'none';
+      el.style.transform = 'translate3d(' + (dx * 0.85) + 'px,0,0)';
+      el.style.opacity = String(1 - Math.min(Math.abs(dx) / (host.clientWidth || 300), 1) * 0.6);
+    }, { passive: true });
+    function finish(cancelled) {
+      var s = st; st = null;
+      if (!s || s.mode !== 'x') return;
+      var el = getMover(), w = host.clientWidth || 300;
+      var dx = cancelled ? 0 : s.dx;
+      var v = dx / Math.max(Date.now() - s.t, 1);   // px per ms
+      var go = !cancelled && !(blocked && blocked()) && (Math.abs(dx) > w * 0.22 || (Math.abs(v) > 0.45 && Math.abs(dx) > 30));
+      if (reduceMotion.matches) { slideClear(el); if (go) shift(dx < 0 ? 1 : -1); return; }
+      if (!go) {   // spring back
+        el.style.transition = 'transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease-out';
+        el.style.transform = 'translate3d(0,0,0)';
+        el.style.opacity = '1';
+        setTimeout(function () { slideClear(el); }, 240);
+        return;
+      }
+      var dir = dx < 0 ? 1 : -1;
+      slideBusy = true;
+      el.style.transition = 'transform 120ms ease-in, opacity 120ms ease-in';
+      el.style.transform = 'translate3d(' + (-dir * w * 0.5) + 'px,0,0)';
+      el.style.opacity = '0';
+      setTimeout(function () {
+        shift(dir);
+        el.style.transition = 'none';
+        el.style.transform = 'translate3d(' + (dir * w * 0.4) + 'px,0,0)';
+        el.style.opacity = '0';
+        void el.offsetWidth;
+        el.style.transition = 'transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease-out';
+        el.style.transform = 'translate3d(0,0,0)';
+        el.style.opacity = '1';
+        setTimeout(function () { slideClear(el); slideBusy = false; }, 240);
+      }, 120);
+    }
+    host.addEventListener('touchend', function () { finish(false); }, { passive: true });
+    host.addEventListener('touchcancel', function () { finish(true); }, { passive: true });
+  }
+  $('#prev').addEventListener('click', function () { slideView(-1); });
+  $('#next').addEventListener('click', function () { slideView(1); });
   document.querySelectorAll('.vseg [data-view]').forEach(function (b) { b.addEventListener('click', function () { setView(b.getAttribute('data-view')); }); });
   $('#week').addEventListener('click', function (e) {
     var ev = e.target.closest('[data-ev]');
@@ -1526,15 +1609,14 @@ body { margin: 0; }
     $('#undo').hidden = false;
     clearTimeout(undoTimer); undoTimer = setTimeout(function () { $('#undo').hidden = true; undoData = null; }, 5000);
   }
-  /* swipe left/right on the week grid to change week (mostly vertical moves are scrolling) */
+  /* swipe left/right on the week grid to change week (mostly vertical moves are scrolling; the grid follows the finger) */
   var wx = 0, wy = 0;
   $('#week').addEventListener('touchstart', function (e) { wx = e.touches[0].clientX; wy = e.touches[0].clientY; wkMoved = false; }, { passive: true });
   $('#week').addEventListener('touchend', function (e) {
     var dx = e.changedTouches[0].clientX - wx, dy = e.changedTouches[0].clientY - wy;
     wkMoved = Math.hypot(dx, dy) > 8;
-    if (wkDragged) return;   // the finger was dragging a lesson: not a swipe
-    if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) shiftWeek(dx < 0 ? 1 : -1);
   }, { passive: true });
+  attachSwipe($('#week'), function () { return $('#wk-scroll'); }, shiftWeek, function () { return !!(wkDrag || wkDragged); });   // a lesson being dragged is not a swipe
   $('#today').addEventListener('click', function () {
     var t = new Date(); state.selected = ymd(t); state.month = new Date(t.getFullYear(), t.getMonth(), 1); render();
   });
@@ -1605,12 +1687,7 @@ body { margin: 0; }
   $('#f-date').addEventListener('input', updateNote);
 
   /* swipe left/right on the grid to change month */
-  var sx = 0, sy = 0;
-  $('#cal').addEventListener('touchstart', function (e) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-  $('#cal').addEventListener('touchend', function (e) {
-    var dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
-    if (Math.abs(dx) > 60 && Math.abs(dy) < 40) shiftMonth(dx < 0 ? 1 : -1);
-  }, { passive: true });
+  attachSwipe($('#cal'), function () { return $('#days'); }, shiftMonth);
 
   /* ---------- enrollments (신청서) ---------- */
   var ENR_DAYS = [[2, '화'], [3, '수'], [4, '목'], [5, '금'], [6, '토'], [0, '일']];

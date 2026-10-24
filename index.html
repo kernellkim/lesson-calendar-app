@@ -87,9 +87,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .days { gap: 2px; }
 .day {
   min-width: 0; aspect-ratio: 5 / 7; border: 1px solid transparent; background: transparent;   /* same cell proportions on every screen; content may still grow it */
-  border-radius: calc(var(--u) * 0.25); padding: calc(var(--u) * 0.25) 1px calc(var(--u) * 0.1875); display: flex; flex-direction: column; align-items: stretch; gap: calc(var(--u) * 0.1875); text-align: left;
+  border-radius: calc(var(--u) * 0.25); padding: calc(var(--u) * 0.25) 1px calc(var(--u) * 0.1875); display: flex; flex-direction: column; align-items: stretch; gap: 1px; text-align: left;   /* chips are packed tight; .nrow/.hn margins keep the space above the first chip as before */
 }
 .day { touch-action: manipulation; }   /* no double-tap zoom on dates */
+.day .nrow, .day .hn { margin-bottom: calc(var(--u) * 0.1875 - 1px); }
+.day .chip { line-height: 1; padding-top: 0; padding-bottom: 0; }   /* more names fit in the same cell */
 .day .nrow { display: flex; align-items: center; justify-content: center; gap: 1px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .day .lu, .wk-dh .lu { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: max(9px, calc(var(--u) * 0.5625)); font-weight: 400; line-height: 1; letter-spacing: -0.03em; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .day .lu.m1, .wk-dh .lu.m1 { color: var(--text); }
@@ -997,15 +999,45 @@ body { margin: 0; }
       if (s === todayS) cls += ' today';
       var hol = getHoliday(s);
       if (hol) cls += ' hol';
-      var chips = list.slice(0, 2).map(function (e) {
+      // every lesson becomes a chip (up to 12); fitMonthChips() then keeps as many as fit in the fixed cell and turns the rest into "+N"
+      var chips = list.slice(0, 12).map(function (e) {
         return '<span class="chip hh" style="' + hh(lessonKey(e)) + '">' + esc(e.title) + '</span>';
       }).join('');
-      if (list.length > 2) chips += '<span class="more">+' + (list.length - 2) + '</span>';
+      if (list.length > 12) chips += '<span class="chip-rest" hidden>' + (list.length - 12) + '</span>';
       html += '<button type="button" class="' + cls + '" data-date="' + s + '" aria-label="' +
         (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + WD[d.getDay()] + '요일, ' + (hol ? esc(hol) + ', ' : '') + (lunarFull(s) ? lunarFull(s) + ', ' : '') + '수업 ' + list.length + '개">' +
         '<span class="nrow' + (lunarLeap(s) ? ' lp' : '') + '"><span class="n">' + d.getDate() + '</span><span class="lu' + (lunarDay1(s) ? ' m1' : '') + '">' + lunarShort(s) + '</span></span>' + (hol ? '<span class="hn">' + esc(hol) + '</span>' : '') + chips + '</button>';
     }
     $('#days').innerHTML = html;
+  }
+  /* Month cells keep their fixed 5:7 size. Show as many name chips as fit under the date (at least 2, as before);
+     when not all fit, the last visible slot becomes "+N". Needs the grid to be visible (measures real sizes). */
+  function fitMonthChips() {
+    var cal = $('#cal');
+    if (cal.hidden || !cal.offsetParent) return;
+    var cells = document.querySelectorAll('#days .day'), plans = [];
+    cells.forEach(function (cell) {   // read phase: measure every cell before changing any
+      var chips = cell.querySelectorAll('.chip');
+      if (chips.length <= 2) return;
+      var cr = cell.getBoundingClientRect(), fr = chips[0].getBoundingClientRect(), cs = getComputedStyle(cell), chs = getComputedStyle(chips[0]);
+      var top = fr.top - cr.top, gap = parseFloat(cs.rowGap) || 0, padB = (parseFloat(cs.paddingBottom) || 0) + 1;
+      var fs = parseFloat(chs.fontSize), oldGap = parseFloat(chs.paddingLeft);   // the old layout: chip = 1.25 lines + 2px, gap = 0.1875u (= the chip's side padding)
+      var today = top + 2 * (fs * 1.25 + 2 + oldGap) + fs + padB;                // height of a cell showing 2 chips + "+N" before this change
+      var target = Math.max(cell.offsetWidth * 7 / 5, today);                    // the cell never gets taller than it already could
+      var chipH = fr.height, avail = target - top - padB;
+      var fit = Math.floor((avail + gap) / (chipH + gap));
+      var rest = cell.querySelector('.chip-rest'), total = chips.length + (rest ? Number(rest.textContent) : 0);
+      var show = total <= fit ? chips.length : Math.max(Math.floor((avail + gap - (fs + gap)) / (chipH + gap)), 2);   // all of them, or fewer plus a line for "+N"
+      plans.push({ cell: cell, chips: chips, show: Math.min(show, chips.length), total: total, minH: today });
+    });
+    plans.forEach(function (p) {   // write phase
+      p.cell.style.aspectRatio = 'auto'; p.cell.style.minHeight = p.minH + 'px';   // rows with 3+ lessons keep the height they had before (2 names + "+N"); with aspect-ratio on, a min-height would widen the column instead
+      if (p.show >= p.total) return;
+      for (var i = p.show; i < p.chips.length; i++) p.chips[i].remove();
+      var old = p.cell.querySelector('.chip-rest'); if (old) old.remove();
+      var more = document.createElement('span'); more.className = 'more'; more.textContent = '+' + (p.total - p.show);
+      p.cell.appendChild(more);
+    });
   }
 
   var CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
@@ -1134,7 +1166,7 @@ body { margin: 0; }
   var wkResizeT = null;
   window.addEventListener('resize', function () {
     clearTimeout(wkResizeT);
-    wkResizeT = setTimeout(function () { if (isWeek()) renderWeek(); }, 120);
+    wkResizeT = setTimeout(function () { if (isWeek()) renderWeek(); else { renderGrid(); fitMonthChips(); } }, 120);
   });
   function render() {
     applyMemberNames();
@@ -1142,6 +1174,7 @@ body { margin: 0; }
     var wk = isWeek();
     $('#cal').hidden = wk; $('#agenda').hidden = wk; $('#week').hidden = !wk; $('#wk-sum').hidden = !wk;
     renderWeek();   // after unhiding: a hidden box cannot be scrolled
+    if (!wk) fitMonthChips();   // after unhiding: sizes can only be measured on a visible grid
     $('#mtotal-m').innerHTML = monthTotalHtml(state.month);
     document.querySelectorAll('.vseg [data-view]').forEach(function (b) { b.setAttribute('aria-selected', String(b.getAttribute('data-view') === state.view)); });
   }

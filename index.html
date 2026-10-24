@@ -87,11 +87,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .days { gap: 2px; }
 .day {
   min-width: 0; aspect-ratio: 5 / 7; border: 1px solid transparent; background: transparent;   /* same cell proportions on every screen; content may still grow it */
-  border-radius: calc(var(--u) * 0.25); padding: calc(var(--u) * 0.25) 1px calc(var(--u) * 0.1875); display: flex; flex-direction: column; align-items: stretch; gap: 1px; text-align: left;   /* chips are packed tight; .nrow/.hn margins keep the space above the first chip as before */
+  border-radius: calc(var(--u) * 0.25); padding: calc(var(--u) * 0.25) 1px calc(var(--u) * 0.1875); display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: left;   /* .nrow/.hn margins keep the space above the first chip as before */
 }
 .day { touch-action: manipulation; }   /* no double-tap zoom on dates */
-.day .nrow, .day .hn { margin-bottom: calc(var(--u) * 0.1875 - 1px); }
-.day .chip { line-height: 1; padding-top: 0; padding-bottom: 0; }   /* more names fit in the same cell */
+.day .nrow, .day .hn { margin-bottom: calc(var(--u) * 0.1875 - 2px); }
+.day .chip { line-height: 1.1; }   /* a little tighter than before so a third name fits, still easy to read */
 .day .nrow { display: flex; align-items: center; justify-content: center; gap: 1px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .day .lu, .wk-dh .lu { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: max(9px, calc(var(--u) * 0.5625)); font-weight: 400; line-height: 1; letter-spacing: -0.03em; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .day .lu.m1, .wk-dh .lu.m1 { color: var(--text); }

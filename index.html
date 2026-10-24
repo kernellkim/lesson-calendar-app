@@ -202,6 +202,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .wk-hit { position: absolute; z-index: 0; left: 0; right: 0; height: calc(var(--wk-row) / 2); background: var(--accent-soft); pointer-events: none; }
 .wkev { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 .wkev.drag-src { opacity: 0.35; }
+.wkev.st-done { --hc: var(--border); }   /* signed lesson: same muted look as in the month list */
+.wkev.st-done::before { opacity: 0.5; }
+.wkev.st-done b, .wkev.st-done small { color: var(--text-muted); }
 .wk-float { position: fixed; z-index: 60; margin: 0; pointer-events: none; outline: 1px solid var(--accent); }
 .wk-ghost { position: absolute; z-index: 2; left: 1px; right: 1px; box-sizing: border-box; border: 1px dashed var(--accent); border-radius: calc(var(--u) * 0.25); background: var(--accent-soft); pointer-events: none; }
 .wk-tip { position: fixed; left: 0; top: 0; z-index: 61; padding: calc(var(--u) * 0.1875) calc(var(--u) * 0.375); border: 1px solid var(--accent); border-radius: calc(var(--u) * 0.25); background: var(--surface); color: var(--text); font-size: calc(var(--u) * 0.6875); line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
@@ -548,6 +551,19 @@ body { margin: 0; }
       <button type="button" class="btn primary" id="scopem-after"></button>
       <button type="button" class="btn primary" id="scopem-all"></button>
       <button type="button" class="btn" id="scopem-cancel">취소</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="wkact" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="wkact-title">
+    <div class="grab"></div>
+    <h2 id="wkact-title"></h2>
+    <p id="wkact-text"></p>
+    <div class="actions" style="flex-direction:column">
+      <button type="button" class="btn primary" id="wkact-sign"></button>
+      <button type="button" class="btn" id="wkact-edit">일정 수정</button>
+      <button type="button" class="btn" id="wkact-cancel">닫기</button>
     </div>
   </div>
 </div>
@@ -1491,7 +1507,7 @@ body { margin: 0; }
   document.querySelectorAll('.vseg [data-view]').forEach(function (b) { b.addEventListener('click', function () { setView(b.getAttribute('data-view')); }); });
   $('#week').addEventListener('click', function (e) {
     var ev = e.target.closest('[data-ev]');
-    if (ev) { var x = state.events.find(function (z) { return z.id === ev.getAttribute('data-ev'); }); if (x) openSheet(x); return; }
+    if (ev) { var x = state.events.find(function (z) { return z.id === ev.getAttribute('data-ev'); }); if (x) openWkAction(x); return; }
     var dh = e.target.closest('.wk-dh');
     if (dh) { state.selected = dh.getAttribute('data-date'); render(); return; }
     // empty cell = day column x 30-minute slot (the grid's half-hour lines): add a lesson starting at that slot
@@ -1677,17 +1693,33 @@ body { margin: 0; }
     } else dtapLast = { date: p.date, out: p.out, t: e.timeStamp, x: e.clientX, y: e.clientY };
   });
   $('#days').addEventListener('pointercancel', function () { dtapDown = null; dtapLast = null; });
+  // a lesson's check: not signed yet = open the sign pad; signed = ask, then back to scheduled (used by the month list and the week dialog)
+  async function toggleSign(ev) {
+    if (ev.status === 'done') {
+      if (!await ask(ev.noshow ? '노쇼 취소' : '사인 삭제', ev.title + ' ' + longDate(ev.date) + (ev.noshow ? ' 노쇼를 취소하고' : ' 사인을 지우고') + ' 예정으로 되돌릴까요?', ev.noshow ? '노쇼 취소' : '사인 삭제')) return;
+      var back = Object.assign({}, ev, { status: 'scheduled' }); delete back.sign; delete back.noshow;
+      await put(back);
+    } else openSign(ev);
+  }
+  /* week view: tapping a lesson block asks what to do (sign / edit), because the blocks are too narrow for a check button */
+  function openWkAction(ev) {
+    var done = ev.status === 'done';
+    $('#wkact-title').textContent = ev.title;
+    $('#wkact-text').textContent = longDate(ev.date) + ' ' + ev.start + ' ~ ' + ev.end + (done ? (ev.noshow ? ' · 노쇼' : ' · 사인 완료') : '');
+    $('#wkact-sign').textContent = done ? (ev.noshow ? '노쇼 취소' : '사인 삭제') : '사인 받기';
+    $('#wkact').hidden = false;
+    function close() { $('#wkact').hidden = true; $('#wkact').onclick = null; ['sign', 'edit', 'cancel'].forEach(function (k) { $('#wkact-' + k).onclick = null; }); }
+    $('#wkact-sign').onclick = function () { close(); toggleSign(ev); };
+    $('#wkact-edit').onclick = function () { close(); openSheet(ev); };
+    $('#wkact-cancel').onclick = close;
+    $('#wkact').onclick = function (e) { if (e.target === $('#wkact')) close(); };
+  }
   $('#list').addEventListener('click', async function (e) {
     var t = e.target.closest('[data-toggle]');
     if (t) {
       var id = t.getAttribute('data-toggle');
       var ev = state.events.find(function (x) { return x.id === id; });
-      if (!ev) return;
-      if (ev.status === 'done') {
-        if (!await ask(ev.noshow ? '노쇼 취소' : '사인 삭제', ev.title + ' ' + longDate(ev.date) + (ev.noshow ? ' 노쇼를 취소하고' : ' 사인을 지우고') + ' 예정으로 되돌릴까요?', ev.noshow ? '노쇼 취소' : '사인 삭제')) return;
-        var back = Object.assign({}, ev, { status: 'scheduled' }); delete back.sign; delete back.noshow;
-        await put(back);
-      } else openSign(ev);
+      if (ev) await toggleSign(ev);
       return;
     }
     var m = e.target.closest('[data-edit]');
@@ -1700,7 +1732,7 @@ body { margin: 0; }
   $('#add').addEventListener('click', function () { openEnr(null, state.tab === 'enr' ? null : state.selected); });
   $('#btn-close').addEventListener('click', closeSheet);
   $('#sheet').addEventListener('click', function (e) { if (e.target === $('#sheet')) closeSheet(); });
-  document.addEventListener('keydown', function (e) { if (e.key !== 'Escape') return; if (!$('#confm').hidden) $('#confm-no').click(); else if (!$('#editm').hidden) $('#editm-cancel').click(); else if (!$('#scopem').hidden) $('#scopem-cancel').click(); else if (!$('#delm').hidden) $('#delm').hidden = true; else if (!$('#sheet').hidden) closeSheet(); });
+  document.addEventListener('keydown', function (e) { if (e.key !== 'Escape') return; if (!$('#wkact').hidden) $('#wkact-cancel').click(); else if (!$('#confm').hidden) $('#confm-no').click(); else if (!$('#editm').hidden) $('#editm-cancel').click(); else if (!$('#scopem').hidden) $('#scopem-cancel').click(); else if (!$('#delm').hidden) $('#delm').hidden = true; else if (!$('#sheet').hidden) closeSheet(); });
   $('#form').addEventListener('submit', saveForm);
   $('#btn-del').addEventListener('click', removeCurrent);
   $('#f-start').addEventListener('input', function () {

@@ -122,7 +122,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* agenda */
 .agenda-h { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 0.625); padding-inline: 2px; }
 .agenda-h h2 { font-family: var(--f-display); font-size: calc(var(--u) * 1.3125); font-weight: 400; margin: 0; }
-.agenda-h h2 .tag { font-family: var(--f-body); font-size: calc(var(--u) * 0.6875); font-weight: 600; background: var(--accent); color: var(--on-accent); padding: 2px calc(var(--u) * 0.4375); border-radius: calc(var(--u) * 0.25); margin-left: calc(var(--u) * 0.375); vertical-align: calc(var(--u) * 0.1875); }
+.agenda-h h2 .tag { white-space: nowrap; font-family: var(--f-body); font-size: calc(var(--u) * 0.6875); font-weight: 600; background: var(--accent); color: var(--on-accent); padding: 2px calc(var(--u) * 0.4375); border-radius: calc(var(--u) * 0.25); margin-left: calc(var(--u) * 0.375); vertical-align: calc(var(--u) * 0.1875); }
 .agenda-h h2 .htag { font-family: var(--f-body); font-size: calc(var(--u) * 0.6875); font-weight: 600; color: var(--accent-text); border: 1px solid var(--accent); padding: 1px calc(var(--u) * 0.375); border-radius: calc(var(--u) * 0.25); margin-left: calc(var(--u) * 0.375); white-space: nowrap; vertical-align: calc(var(--u) * 0.1875); }
 .agenda-h h2 { min-width: 0; }
 .agenda-h p { flex: none; white-space: nowrap; margin: 0; font-size: calc(var(--u) * 0.8125); color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -551,19 +551,6 @@ body { margin: 0; }
       <button type="button" class="btn primary" id="scopem-after"></button>
       <button type="button" class="btn primary" id="scopem-all"></button>
       <button type="button" class="btn" id="scopem-cancel">취소</button>
-    </div>
-  </div>
-</div>
-
-<div class="scrim" id="wkact" hidden>
-  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="wkact-title">
-    <div class="grab"></div>
-    <h2 id="wkact-title"></h2>
-    <p id="wkact-text"></p>
-    <div class="actions" style="flex-direction:column">
-      <button type="button" class="btn primary" id="wkact-sign"></button>
-      <button type="button" class="btn" id="wkact-edit">일정 수정</button>
-      <button type="button" class="btn" id="wkact-cancel">닫기</button>
     </div>
   </div>
 </div>
@@ -1188,7 +1175,7 @@ body { margin: 0; }
     applyMemberNames();
     assignColors(); renderHead(); renderGrid(); renderAgenda(); renderEnr(); renderTabs();
     var wk = isWeek();
-    $('#cal').hidden = wk; $('#agenda').hidden = wk; $('#week').hidden = !wk; $('#wk-sum').hidden = !wk;
+    $('#cal').hidden = wk; $('#week').hidden = !wk;   // the day list (with the sign check) stays visible under both month and week $('#wk-sum').hidden = !wk;
     renderWeek();   // after unhiding: a hidden box cannot be scrolled
     if (!wk) fitMonthChips();   // after unhiding: sizes can only be measured on a visible grid
     $('#mtotal-m').innerHTML = monthTotalHtml(state.month);
@@ -1507,7 +1494,7 @@ body { margin: 0; }
   document.querySelectorAll('.vseg [data-view]').forEach(function (b) { b.addEventListener('click', function () { setView(b.getAttribute('data-view')); }); });
   $('#week').addEventListener('click', function (e) {
     var ev = e.target.closest('[data-ev]');
-    if (ev) { var x = state.events.find(function (z) { return z.id === ev.getAttribute('data-ev'); }); if (x) openWkAction(x); return; }
+    if (ev) { var x = state.events.find(function (z) { return z.id === ev.getAttribute('data-ev'); }); if (x) openSheet(x); return; }
     var dh = e.target.closest('.wk-dh');
     if (dh) { state.selected = dh.getAttribute('data-date'); render(); return; }
     // empty cell = day column x 30-minute slot (the grid's half-hour lines): add a lesson starting at that slot
@@ -1701,19 +1688,6 @@ body { margin: 0; }
       await put(back);
     } else openSign(ev);
   }
-  /* week view: tapping a lesson block asks what to do (sign / edit), because the blocks are too narrow for a check button */
-  function openWkAction(ev) {
-    var done = ev.status === 'done';
-    $('#wkact-title').textContent = ev.title;
-    $('#wkact-text').textContent = longDate(ev.date) + ' ' + ev.start + ' ~ ' + ev.end + (done ? (ev.noshow ? ' · 노쇼' : ' · 사인 완료') : '');
-    $('#wkact-sign').textContent = done ? (ev.noshow ? '노쇼 취소' : '사인 삭제') : '사인 받기';
-    $('#wkact').hidden = false;
-    function close() { $('#wkact').hidden = true; $('#wkact').onclick = null; ['sign', 'edit', 'cancel'].forEach(function (k) { $('#wkact-' + k).onclick = null; }); }
-    $('#wkact-sign').onclick = function () { close(); toggleSign(ev); };
-    $('#wkact-edit').onclick = function () { close(); openSheet(ev); };
-    $('#wkact-cancel').onclick = close;
-    $('#wkact').onclick = function (e) { if (e.target === $('#wkact')) close(); };
-  }
   $('#list').addEventListener('click', async function (e) {
     var t = e.target.closest('[data-toggle]');
     if (t) {
@@ -1732,7 +1706,7 @@ body { margin: 0; }
   $('#add').addEventListener('click', function () { openEnr(null, state.tab === 'enr' ? null : state.selected); });
   $('#btn-close').addEventListener('click', closeSheet);
   $('#sheet').addEventListener('click', function (e) { if (e.target === $('#sheet')) closeSheet(); });
-  document.addEventListener('keydown', function (e) { if (e.key !== 'Escape') return; if (!$('#wkact').hidden) $('#wkact-cancel').click(); else if (!$('#confm').hidden) $('#confm-no').click(); else if (!$('#editm').hidden) $('#editm-cancel').click(); else if (!$('#scopem').hidden) $('#scopem-cancel').click(); else if (!$('#delm').hidden) $('#delm').hidden = true; else if (!$('#sheet').hidden) closeSheet(); });
+  document.addEventListener('keydown', function (e) { if (e.key !== 'Escape') return; if (!$('#confm').hidden) $('#confm-no').click(); else if (!$('#editm').hidden) $('#editm-cancel').click(); else if (!$('#scopem').hidden) $('#scopem-cancel').click(); else if (!$('#delm').hidden) $('#delm').hidden = true; else if (!$('#sheet').hidden) closeSheet(); });
   $('#form').addEventListener('submit', saveForm);
   $('#btn-del').addEventListener('click', removeCurrent);
   $('#f-start').addEventListener('input', function () {

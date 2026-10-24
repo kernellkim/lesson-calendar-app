@@ -2127,6 +2127,11 @@ body { margin: 0; }
     enr.id = eState.editing || (same ? same.id : newId());
     // editing days/time/period: redo this person's unsigned lessons from today on, signed ones stay
     var old = eState.editing ? state.enrollments.find(function (e) { return e.id === enr.id; }) : null;
+    // the form does not carry the resident's confirm signature (or the applied date): keep them when editing, or saving would erase them
+    if (old) {
+      if (validSign(old.confirm)) { enr.confirm = old.confirm; enr.confirmCount = old.confirmCount; enr.confirmFee = old.confirmFee; }
+      if (old.appliedOn && !enr.appliedOn) enr.appliedOn = old.appliedOn;
+    }
     var changed = !!old && [old.days.slice().sort().join(), old.start, old.end, JSON.stringify(old.slots || {}), old.periodStart, old.periodEnd].join('|') !==
       [enr.days.slice().sort().join(), enr.start, enr.end, JSON.stringify(enr.slots || {}), enr.periodStart, enr.periodEnd].join('|');
     var today = ymd(new Date());

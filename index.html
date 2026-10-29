@@ -2363,6 +2363,7 @@ body { margin: 0; }
   /* ---- preview + print ---- */
   function openPreview(title, pages, land) {
     $('#pv-title').textContent = title;
+    pdfFile = null;
     $('#stage').innerHTML = pages.map(function (p) { return '<div class="pagebox">' + p + '</div>'; }).join('');
     var st = document.getElementById('page-style');
     if (!st) { st = document.createElement('style'); st.id = 'page-style'; document.head.appendChild(st); }
@@ -2385,7 +2386,58 @@ body { margin: 0; }
   }
   window.addEventListener('resize', function () { if (!$('#preview').hidden) fitPreview(); });
   $('#pv-close').addEventListener('click', closePreview);
-  $('#pv-print').addEventListener('click', function () { try { window.print(); } catch (e) { toast('이 화면에서는 인쇄를 열지 못했어요'); } });
+  /* iOS home-screen apps ignore window.print(): render the pages to a PDF and hand it to the share sheet */
+  var pdfFile = null, pdfBusy = false;
+  function isStandalone() { return navigator.standalone === true || matchMedia('(display-mode: standalone)').matches; }
+  function loadScript(src) {
+    return new Promise(function (ok, fail) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = fail; document.head.appendChild(s); });
+  }
+  async function buildPdf() {
+    if (!window.html2canvas) await loadScript('lib/html2canvas.min.js');
+    if (!window.jspdf) await loadScript('lib/jspdf.umd.min.js');
+    var papers = document.querySelectorAll('#stage .pagebox > .paper');
+    var host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-10000px;top:0;';
+    document.body.appendChild(host);
+    try {
+      var pdf = null;
+      for (var i = 0; i < papers.length; i++) {
+        var clone = papers[i].cloneNode(true);
+        clone.style.transform = 'none';
+        host.appendChild(clone);
+        var land = clone.classList.contains('land');
+        var canvas = await html2canvas(clone, { scale: 2, backgroundColor: '#fff' });
+        host.removeChild(clone);
+        var w = land ? 297 : 210, h = land ? 210 : 297;
+        if (!pdf) pdf = new window.jspdf.jsPDF({ orientation: land ? 'l' : 'p', unit: 'mm', format: 'a4' });
+        else pdf.addPage('a4', land ? 'l' : 'p');
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, w, h);
+      }
+      return new File([pdf.output('blob')], ($('#pv-title').textContent || 'print') + '.pdf', { type: 'application/pdf' });
+    } finally { host.remove(); }
+  }
+  async function printAsPdf() {
+    if (pdfBusy) return;
+    pdfBusy = true;
+    try {
+      if (!pdfFile) { toast('PDF 만드는 중…'); pdfFile = await buildPdf(); }
+      if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+        await navigator.share({ files: [pdfFile] });
+        return;
+      }
+      window.open(URL.createObjectURL(pdfFile), '_blank');
+      toast('PDF가 열렸어요. 공유 버튼 → 프린트를 누르세요');
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // user closed the share sheet
+      if (pdfFile && e && e.name === 'NotAllowedError') toast('PDF 준비 완료. 인쇄를 한 번 더 누르세요'); // gesture expired while rendering
+      else if (pdfFile) { window.open(URL.createObjectURL(pdfFile), '_blank'); toast('PDF가 열렸어요. 공유 버튼 → 프린트를 누르세요'); }
+      else toast('PDF를 만들지 못했어요');
+    } finally { pdfBusy = false; }
+  }
+  $('#pv-print').addEventListener('click', function () {
+    if (isStandalone()) { printAsPdf(); return; }
+    try { window.print(); } catch (e) { toast('이 화면에서는 인쇄를 열지 못했어요'); }
+  });
 
   /* ---- wiring ---- */
   document.querySelector('.tabs').addEventListener('click', function (e) {

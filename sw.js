@@ -1,5 +1,5 @@
 /* Service worker: makes the app open offline. Bump CACHE when you change app files. */
-const CACHE = 'lesson-calendar-v88';
+const CACHE = 'lesson-calendar-v89';
 const SHELL = [
   './',
   './index.html',
@@ -10,7 +10,9 @@ const SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './icons/apple-touch-icon.png'
+  './icons/apple-touch-icon.png',
+  './lib/html2canvas.min.js',
+  './lib/jspdf.umd.min.js'
 ];
 
 self.addEventListener('install', (event) => {

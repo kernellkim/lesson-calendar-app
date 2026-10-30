@@ -371,6 +371,8 @@ body { margin: 0; }
 .paper .rows .n { width: 12%; }
 .paper .rows td { padding: 0.5mm 2mm; }
 .paper .sig { display: block; margin: 0 auto; height: 8.6mm; width: auto; max-width: 100%; fill: none; stroke: #000; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.paper .seal { position: relative; display: inline-block; }
+.paper .seal-sig { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 12mm; width: auto; max-width: none; margin: 0; pointer-events: none; }
 .sbig { display: flex; flex-direction: column; gap: calc(var(--u) * 0.625); }
 .sname { font-size: calc(var(--u) * 1.375); font-weight: 700; margin: 0; overflow-wrap: anywhere; }
 .sask { font-size: calc(var(--u) * 1.25); line-height: 1.4; margin: 0; }
@@ -664,6 +666,7 @@ body { margin: 0; }
     <div id="g-slots"></div>
     <div id="g-lessons-box" hidden><p class="help" id="g-lessons"></p></div>
     <p class="help" id="g-del-help" hidden>삭제하면 아직 진행 전인 연결 수업도 달력에서 함께 지워져요.</p>
+    <button type="button" class="btn" id="btn-eseal" hidden>신청서 사인 지우기</button>
     <p class="err" id="g-msg" role="alert" hidden></p>
     <div class="actions">
       <button type="button" class="btn danger" id="btn-edel" hidden>삭제</button>
@@ -837,6 +840,12 @@ body { margin: 0; }
   function loadJSON(key, fallback) {
     try { var v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; } catch (e) { return fallback; }
   }
+  function cleanMember(m) { return Members.cleanMember(m, validSign); }
+  // cloud copy wins per member, but a seal only this device has is kept
+  function unionMembers(a, b) {
+    var mine = byId(a);
+    return union(a, b).map(function (m) { var l = mine[m.id]; return l && !validSign(m.seal) && validSign(l.seal) ? Object.assign({}, m, { seal: l.seal, sealAt: l.sealAt }) : m; });
+  }
   function validMember(m) { return m && typeof m.id === 'string' && typeof m.name === 'string' && m.name.trim(); }
   function memberData() { return { events: state.events, enrollments: state.enrollments, members: state.members, colors: state.settings.colors, newId: newId }; }
   // Names shown everywhere come from the member record (title / name are only a derived copy)
@@ -845,13 +854,14 @@ body { margin: 0; }
      The first time it changes anything, the raw old data is copied to <key>__backup_before_member_id_migration (never overwritten). */
   function runMemberMigration() {
     var d = memberData(), changed = Members.migrate(d);
-    var deduped = Members.dedupe(d);   // duplicates of an enrolled member (no 신청서 of their own) merge into that member
+    var deduped = Members.dedupe(d);
+    var sealed = Members.backfillSeals(d, validSign);   // first confirm signature of each member becomes their 신청서 seal   // duplicates of an enrolled member (no 신청서 of their own) merge into that member
     state.members = d.members;
-    if (changed || deduped) {
+    if (changed || deduped || sealed) {
       try {
         [LS, LS_E, LS_S].forEach(function (k) {
           var raw = localStorage.getItem(k);
-          var bk = k + (changed ? BACKUP_SUFFIX : '__backup_before_member_dedupe');   // first migration, or the later duplicate repair
+          var bk = k + (changed ? BACKUP_SUFFIX : deduped ? '__backup_before_member_dedupe' : '__backup_before_seal_backfill');   // first migration, or the later duplicate repair
           if (raw != null && localStorage.getItem(bk) == null) localStorage.setItem(bk, raw);
         });
       } catch (e) { toast('저장 공간이 부족해요. 백업 후 정리해 주세요.'); }
@@ -869,7 +879,7 @@ body { margin: 0; }
     state.mode = 'local';
     state.events = lsLoad();
     var mm = loadJSON(LS_M, []);
-    state.members = Array.isArray(mm) ? mm.filter(validMember).map(function (m) { return { id: m.id, name: m.name }; }) : [];
+    state.members = Array.isArray(mm) ? mm.filter(validMember).map(cleanMember) : [];
     var en = loadJSON(LS_E, []);
     state.enrollments = Array.isArray(en) ? en.filter(validEnr).map(cleanEnr) : [];
     var s = loadJSON(LS_S, null);
@@ -969,7 +979,7 @@ body { margin: 0; }
   function adopt(data) {
     state.events = (data.events || []).filter(validEvent);
     state.enrollments = (data.enrollments || []).filter(validEnr).map(cleanEnr);
-    state.members = (data.members || []).filter(validMember).map(function (m) { return { id: m.id, name: m.name }; });
+    state.members = (data.members || []).filter(validMember).map(cleanMember);
     if (data.settings) { state.settings.instructor = data.settings.instructor || state.settings.instructor; state.settings.label = data.settings.label || state.settings.label; if (data.settings.colors) state.settings.colors = cleanColors(data.settings.colors); }
     runMemberMigration();
     applyMemberNames();
@@ -990,7 +1000,7 @@ body { margin: 0; }
       if (row) cloudCounts = { events: (row.data.events || []).length, enrollments: (row.data.enrollments || []).length };
       if (row && firstLogin && mine) {
         var d = row.data;
-        adopt({ events: union(state.events, (d.events || []).filter(validEvent)), enrollments: union(state.enrollments, (d.enrollments || []).filter(validEnr).map(cleanEnr)), members: union(state.members, (d.members || []).filter(validMember)), settings: d.settings });
+        adopt({ events: union(state.events, (d.events || []).filter(validEvent)), enrollments: union(state.enrollments, (d.enrollments || []).filter(validEnr).map(cleanEnr)), members: unionMembers(state.members, (d.members || []).filter(validMember)), settings: d.settings });
         pushAfter = true;
       } else {
         var act = Backup.guard({ cloudAt: row && row.updated_at, lastBackupAt: sy.lastBackupAt, dirty: sy.dirty, pendingAt: lsGet(LS_PEND) });
@@ -2167,6 +2177,7 @@ body { margin: 0; }
         '요일·시간을 바꿔 저장하면 서명 안 된 오늘 이후 수업이 바뀌어요. 서명한 수업은 그대로예요.';
     }
     $('#btn-edel').hidden = !enr;
+    $('#btn-eseal').hidden = !(enr && sealSvg(enr));
     $('#g-del-help').hidden = !enr;
     $('#g-msg').hidden = true;
     $('#btn-esave').disabled = false;
@@ -2364,7 +2375,7 @@ body { margin: 0; }
       '<p class="i1">100% 부과 됩니다</p>' +
       '<p>7. 회원님의 개인 사유로 인한 결석은 보충 하실 수 없습니다.</p>' +
       '<p class="small">[단, 질병 등 부득이한 사정으로 취소 희망 시 소명자료를 제출 하여야 합니다.]</p>' +
-      '<p class="sg">' + fill(enr.dong) + ' 동 ' + fill(enr.ho, 'w') + ' 호 성명 ' + fill(enr.name, 'w2') + ' (인)</p>' +
+      '<p class="sg">' + fill(enr.dong) + ' 동 ' + fill(enr.ho, 'w') + ' 호 성명 ' + fill(enr.name, 'w2') + ' <span class="seal">(인)' + sealSvg(enr) + '</span></p>' +
       '<p class="ph">연 락 처 : ' + esc(enr.phone) + '</p>' +
       '<p class="dt">' + fill(ap.getFullYear()) + ' 년 ' + fill(ap.getMonth() + 1) + ' 월 ' + fill(ap.getDate()) + ' 일 &nbsp; 담당자 : ' + esc(state.settings.instructor) + ' (인)</p>' +
       '<p class="brand">Acrovista Sports Community</p>' +
@@ -2578,6 +2589,10 @@ body { margin: 0; }
 
   /* ---------- member signature: strokes stored as a compact SVG path (SW x SH box), ~1 KB each ---------- */
   var SW = 300, SH = 100, PH = SH, signEv = null, signEnrId = null, strokes = [], cv = null;
+  function sealSvg(enr) {
+    var m = state.members.find(function (x) { return x.id === enr.memberId; });
+    return m && validSign(m.seal) ? '<svg class="sig seal-sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + m.seal + '"/></svg>' : '';
+  }
   function validSign(v) { return typeof v === 'string' && v.length < 20000 && /^[ML0-9. -]+$/.test(v); }
   function padXY(e) { var r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) / r.width * SW), Math.round((e.clientY - r.top) / r.height * PH)]; }
   function padDraw() {
@@ -2634,12 +2649,18 @@ body { margin: 0; }
     closeSign();
     await put(Object.assign({}, ev, { status: 'done', noshow: true }));
   });
+  $('#btn-eseal').addEventListener('click', async function () {
+    var enr = state.enrollments.find(function (e) { return e.id === eState.editing; }), m = enr && state.members.find(function (x) { return x.id === enr.memberId; });
+    if (!m || !await ask('신청서 사인 지우기', '신청서의 (인) 옆 사인을 지워요. 다음에 "사인 받기"로 받는 사인이 새 신청서 사인이 돼요.', '지우기')) return;
+    m.seal = ''; delete m.sealAt; saveMembers(); markDirty();
+    $('#btn-eseal').hidden = true; toast('신청서 사인을 지웠어요'); render();
+  });
   $('#sign-ok').addEventListener('click', async function () {
     if (!strokes.length) { toast('먼저 사인해 주세요'); return; }
     var d = fitStrokes().map(function (s) { return 'M' + s[0].join(' ') + s.slice(1).map(function (p) { return 'L' + p.join(' '); }).join('') + (s.length === 1 ? 'L' + (s[0][0] + 1) + ' ' + s[0][1] : ''); }).join('');
     if (signEnrId) {
       var en = state.enrollments.find(function (x) { return x.id === signEnrId; }); closeSign();
-      if (en) { putEnr(Object.assign({}, en, { confirm: d, confirmCount: enrCount(en), confirmFee: enrFee(en) })); toast('확인 사인을 받았어요'); }
+      if (en) { Members.captureSeal(state.members.find(function (m) { return m.id === en.memberId; }), d, ymd(new Date()), validSign); putEnr(Object.assign({}, en, { confirm: d, confirmCount: enrCount(en), confirmFee: enrFee(en) })); toast('확인 사인을 받았어요'); }
       return;
     }
     var ev = signEv; closeSign();
@@ -2710,7 +2731,7 @@ body { margin: 0; }
       }
       if (data && Array.isArray(data.members)) {
         var mById = {}; state.members.forEach(function (m) { mById[m.id] = m; });
-        data.members.filter(validMember).forEach(function (m) { if (!mById[m.id]) state.members.push({ id: m.id, name: m.name }); });
+        data.members.filter(validMember).forEach(function (m) { if (!mById[m.id]) state.members.push(cleanMember(m)); else if (!validSign(mById[m.id].seal) && validSign(m.seal)) Members.captureSeal(mById[m.id], m.seal, m.sealAt || '', validSign); });
       }
       runMemberMigration();
       applyMemberNames();

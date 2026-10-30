@@ -95,6 +95,29 @@
     return hit;
   }
 
+  /* Seal = the member's FIRST confirmation signature, printed once on the 신청서 next to 성명 (인). Fields on a member: seal (SVG path), sealAt (date, for "older wins").
+     seal === '' means "cleared on purpose": the backfill leaves it alone. `valid` is the app's validSign. */
+  function cleanMember(m, valid) {
+    var o = { id: m.id, name: m.name };
+    if (valid(m.seal)) { o.seal = m.seal; if (typeof m.sealAt === 'string') o.sealAt = m.sealAt; } else if (m.seal === '') o.seal = '';
+    return o;
+  }
+  /* First sign only: stores `sign` as the member's seal when there is none yet. Returns true when stored. Never overwrites. */
+  function captureSeal(m, sign, at, valid) {
+    if (!m || valid(m.seal) || !valid(sign)) return false;
+    m.seal = sign; m.sealAt = at; return true;
+  }
+  /* Members without a seal (never cleared) take the confirm signature of their earliest month. Idempotent. Returns how many were filled. */
+  function backfillSeals(d, valid) {
+    var n = 0;
+    d.members.forEach(function (m) {
+      if (m.seal !== undefined) return;
+      var e = d.enrollments.filter(function (x) { return x.memberId === m.id && valid(x.confirm); }).sort(function (a, b) { return a.month < b.month ? -1 : a.month > b.month ? 1 : 0; })[0];
+      if (e) { m.seal = e.confirm; m.sealAt = e.month; n++; }
+    });
+    return n;
+  }
+
   function lessonCount(d, id) { return d.events.filter(function (e) { return e.memberId === id; }).length; }
 
   /* Rename. Returns { ok: true }, { ok: false, reason: 'empty' }, or { conflict: otherMember } when another member already has that name. */
@@ -112,6 +135,8 @@
   /* Move everything of member `fromId` to `toId` (whose name and color stay), then drop `fromId`. Returns how many lessons moved. */
   function merge(d, fromId, toId) {
     var n = lessonCount(d, fromId);
+    var from = d.members.filter(function (m) { return m.id === fromId; })[0], to = d.members.filter(function (m) { return m.id === toId; })[0];
+    if (from && to && typeof from.seal === 'string' && from.seal && (!to.seal || (from.sealAt && (!to.sealAt || from.sealAt < to.sealAt)))) { to.seal = from.seal; to.sealAt = from.sealAt; }
     d.events.forEach(function (e) { if (e.memberId === fromId) e.memberId = toId; });
     d.enrollments.forEach(function (e) { if (e.memberId === fromId) e.memberId = toId; });
     d.members = d.members.filter(function (m) { return m.id !== fromId; });
@@ -239,7 +264,7 @@
     return { day: best.day, start: best.start, end: end };
   }
 
-  var api = { householdOf: householdOf, familyNames: familyNames, representative: representative, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
+  var api = { cleanMember: cleanMember, captureSeal: captureSeal, backfillSeals: backfillSeals, householdOf: householdOf, familyNames: familyNames, representative: representative, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
   root.Members = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

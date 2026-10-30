@@ -219,3 +219,40 @@ console.log('OK members');
   console.log('OK representative');
 }
 
+
+// ---- seal: the member's first confirmation signature, printed once on the 신청서 ----
+{
+  const valid = (v) => typeof v === 'string' && /^[ML0-9. -]+$/.test(v) && v.length > 0;
+  // first-sign capture, never overwritten by a re-sign
+  const m = { id: 'a', name: '가' };
+  assert.strictEqual(M.captureSeal(m, 'M0 0L5 5', '2026-10-01', valid), true);
+  assert.strictEqual(M.captureSeal(m, 'M9 9L8 8', '2026-11-01', valid), false);
+  assert.strictEqual(m.seal, 'M0 0L5 5');
+  assert.strictEqual(M.captureSeal({ id: 'b', name: 'x' }, '<bad>', 'd', valid), false);
+  // survives reload / backup restore (cleanMember), and a deliberate clear stays cleared
+  assert.deepStrictEqual(M.cleanMember(JSON.parse(JSON.stringify(m)), valid), { id: 'a', name: '가', seal: 'M0 0L5 5', sealAt: '2026-10-01' });
+  assert.deepStrictEqual(M.cleanMember({ id: 'a', name: '가', seal: '<x>' }, valid), { id: 'a', name: '가' });
+  assert.strictEqual(M.cleanMember({ id: 'a', name: '가', seal: '' }, valid).seal, '');
+  // backfill: earliest month's confirm; idempotent; skips cleared and already sealed
+  const d = {
+    members: [{ id: 'a', name: '가' }, { id: 'b', name: '나', seal: '' }, { id: 'c', name: '다', seal: 'M1 1L2 2', sealAt: '2026-01' }, { id: 'e', name: '라' }],
+    enrollments: [
+      { id: '1', memberId: 'a', month: '2026-10', confirm: 'M2 2L3 3' }, { id: '2', memberId: 'a', month: '2026-09', confirm: 'M1 1L1 2' }, { id: '3', memberId: 'a', month: '2026-08' },
+      { id: '4', memberId: 'b', month: '2026-09', confirm: 'M4 4L5 5' }, { id: '5', memberId: 'c', month: '2026-09', confirm: 'M7 7L8 8' }],
+    events: [], colors: {}
+  };
+  assert.strictEqual(M.backfillSeals(d, valid), 1);
+  assert.strictEqual(d.members[0].seal, 'M1 1L1 2');
+  assert.strictEqual(d.members[1].seal, ''); assert.strictEqual(d.members[2].seal, 'M1 1L2 2'); assert.strictEqual(d.members[3].seal, undefined);
+  assert.strictEqual(M.backfillSeals(d, valid), 0);
+  // dedupe/merge keeps the survivor's seal; takes the other's when the survivor has none; both -> the older
+  const mk = (a, b) => ({ members: [Object.assign({ id: 'to', name: 'x' }, a), Object.assign({ id: 'from', name: 'x' }, b)], enrollments: [{ id: 'e', memberId: 'to', month: '2026-10' }], events: [], colors: {} });
+  let t = mk({ seal: 'M1 1', sealAt: '2026-05' }, { seal: 'M2 2', sealAt: '2026-09' }); M.merge(t, 'from', 'to'); assert.strictEqual(t.members[0].seal, 'M1 1');
+  t = mk({ seal: 'M1 1', sealAt: '2026-09' }, { seal: 'M2 2', sealAt: '2026-05' }); M.merge(t, 'from', 'to'); assert.strictEqual(t.members[0].seal, 'M2 2');
+  t = mk({}, { seal: 'M2 2', sealAt: '2026-05' }); M.merge(t, 'from', 'to'); assert.strictEqual(t.members[0].seal, 'M2 2');
+  t = mk({ seal: 'M1 1' }, {}); M.merge(t, 'from', 'to'); assert.strictEqual(t.members[0].seal, 'M1 1');
+  // rename keeps the seal; migrate keeps it too
+  const r = { members: [{ id: 'a', name: '가', seal: 'M1 1' }], enrollments: [], events: [], colors: {} };
+  M.rename(r, 'a', '새'); M.migrate(r); assert.strictEqual(r.members[0].seal, 'M1 1');
+  console.log('OK seal');
+}

@@ -68,6 +68,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .head-l { min-width: 0; }
 .month { font-family: var(--f-display); font-size: calc(var(--u) * 1.875); line-height: 1.2; margin: 0; letter-spacing: 0.01em; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 380px) { .month { font-size: calc(var(--u) * 1.625); } .head { gap: calc(var(--u) * 0.5); } .head-r { gap: calc(var(--u) * 0.25); } }
+.sync .tap { text-decoration: underline; cursor: pointer; }
 .sync { margin: 2px 0 0; font-size: calc(var(--u) * 0.75); color: var(--text-muted); }
 .head-r { display: flex; gap: calc(var(--u) * 0.375); align-items: center; }
 .ibtn {
@@ -412,7 +413,7 @@ body { margin: 0; }
   <header class="head">
     <div class="head-l">
       <h1 class="month" id="month">세션 캘린더</h1>
-      <p class="sync"><span id="sync">이 기기에 저장됨</span> · <button type="button" class="linkbtn" id="open-backup">설정·백업</button></p>
+      <p class="sync"><span id="sync"></span> · <button type="button" class="linkbtn" id="open-backup">설정·백업</button></p>
     </div>
     <div class="head-r">
       <button class="ibtn" id="prev" type="button" aria-label="이전 달"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -600,7 +601,12 @@ body { margin: 0; }
     </div>
     <div id="cloud-in" hidden>
       <p class="help" id="cloud-who"></p>
-      <div class="stack"><button type="button" class="btn" id="btn-logout" style="flex:none">로그아웃</button></div>
+      <p class="help" id="cloud-detail"></p>
+      <p class="err" id="cloud-err" hidden></p>
+      <div class="stack">
+        <button type="button" class="btn primary" id="btn-pushnow" style="flex:none">지금 백업</button>
+        <button type="button" class="btn" id="btn-logout" style="flex:none">로그아웃</button>
+      </div>
     </div>
     <div class="actions"><button type="button" class="btn" id="btn-backup-close">닫기</button></div>
   </div>
@@ -693,6 +699,7 @@ body { margin: 0; }
 
 <script src="holidays.js"></script>
 <script src="members.js"></script>
+<script src="backup.js"></script>
 <script>
 (function () {
   'use strict';
@@ -794,15 +801,15 @@ body { margin: 0; }
   }
   function saveMembers() { try { localStorage.setItem(LS_M, JSON.stringify(state.members)); } catch (e) {} }
   function lsSave() {
-    try { localStorage.setItem(LS, JSON.stringify(state.events)); saveMembers(); pushSoon(); return true; }
+    try { localStorage.setItem(LS, JSON.stringify(state.events)); saveMembers(); markDirty(); return true; }
     catch (e) { toast('저장 공간이 부족해요. 백업 후 정리해 주세요.'); return false; }
   }
   var saveEvents = lsSave;
   function saveEnr() {
-    try { localStorage.setItem(LS_E, JSON.stringify(state.enrollments)); saveMembers(); pushSoon(); return true; }
+    try { localStorage.setItem(LS_E, JSON.stringify(state.enrollments)); saveMembers(); markDirty(); return true; }
     catch (e) { toast('저장 공간이 부족해요. 백업 후 정리해 주세요.'); return false; }
   }
-  function saveSettings() { try { localStorage.setItem(LS_S, JSON.stringify(state.settings)); pushSoon(); } catch (e) {} }
+  function saveSettings() { try { localStorage.setItem(LS_S, JSON.stringify(state.settings)); markDirty(); } catch (e) {} }
   function validEnr(e) { return e && typeof e.id === 'string' && typeof e.name === 'string' && /^\d{4}-\d{2}$/.test(e.month || ''); }
   // slots (optional): { weekday: { start, end } } overrides start/end for that weekday
   function cleanSlots(sl) {
@@ -876,14 +883,37 @@ body { margin: 0; }
     applyMemberNames();
     syncAllEnrollments();
     render();
+    renderSync();
     cloudStart();
   }
 
   /* ---------- cloud (Supabase REST, no library): whole data set = one row per user ---------- */
   // ponytail: last-write-wins on the whole blob; add per-row sync only if two devices edit at once.
   var SB = 'https://yxeyfcuxwmnjjctllwjc.supabase.co', SB_KEY = 'sb_publishable_QrFHUHo3OVEcQF3NrwvF_w_rHbhct7S';
-  var LS_A = 'lesson-calendar-auth-v1', LS_SYNC = 'lesson-calendar-lastsync-v1';
-  var sess = loadJSON(LS_A, null), pushTimer = null;
+  var LS_A = 'lesson-calendar-auth-v1', LS_SYNC = 'lesson-calendar-lastsync-v1', LS_DIRTY = 'lesson-calendar-dirty-v1', LS_PEND = 'lesson-calendar-pushing-v1';
+  var sess = loadJSON(LS_A, null), pushTimer = null, retryTimer = null, retryN = 0, cloudCounts = null;
+  var launching = !!sess;   // no push until cloudStart has looked at the cloud copy, so a stale phone never overwrites a newer cloud
+  // One sync state (backup.js); every status text comes from renderSync()
+  var sy = Backup.init({ loggedIn: !!sess, dirty: lsGet(LS_DIRTY) === '1', lastBackupAt: lsGet(LS_SYNC) });
+  function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function syn(ev, a, b) {
+    sy = Backup.next(sy, ev, a, b);
+    try {
+      localStorage.setItem(LS_DIRTY, sy.dirty ? '1' : '0');
+      if (ev === 'ok' || ev === 'clean') { localStorage.setItem(LS_SYNC, sy.lastBackupAt); localStorage.removeItem(LS_PEND); }
+    } catch (e) {}
+    renderSync();
+  }
+  function renderSync() {
+    var el = $('#sync'); if (!el) return;
+    el.textContent = Backup.text(sy);
+    el.classList.toggle('tap', Backup.status(sy) !== 'saved');
+    var err = $('#cloud-err'); err.textContent = sy.error ? '백업 오류: ' + sy.error : ''; err.hidden = !sy.error;
+    var cc = cloudCounts ? '수업 ' + cloudCounts.events + '개 · 신청서 ' + cloudCounts.enrollments + '건' : '아직 확인 전';
+    $('#cloud-detail').textContent = '마지막 백업: ' + (Backup.when(sy.lastBackupAt) || '없음') + ' · 이 기기 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건 / 클라우드 ' + cc;
+    $('#btn-pushnow').disabled = Backup.status(sy) === 'saving';
+  }
+  function markDirty() { syn('edit'); pushSoon(); }
   function blob() { return { app: 'lesson-calendar', version: 3, events: state.events, enrollments: state.enrollments, members: state.members, settings: state.settings }; }
   async function sb(path, opt, token) {
     opt = opt || {};
@@ -896,6 +926,8 @@ body { margin: 0; }
   function setSess(j) {
     sess = j && j.access_token ? { access: j.access_token, refresh: j.refresh_token, exp: Date.now() + (j.expires_in - 60) * 1000, uid: j.user.id, email: j.user.email } : null;
     try { if (sess) localStorage.setItem(LS_A, JSON.stringify(sess)); else localStorage.removeItem(LS_A); } catch (e) {}
+    if (!!sess !== sy.loggedIn) syn(sess ? 'login' : 'logout');   // a token refresh is not a login
+    if (!sess) { clearTimeout(pushTimer); clearTimeout(retryTimer); launching = false; cloudCounts = null; renderSync(); }
     showCloud();
   }
   async function token() {
@@ -903,16 +935,37 @@ body { margin: 0; }
     if (Date.now() > sess.exp) setSess(await sb('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: sess.refresh }) }));
     return sess && sess.access;
   }
-  async function push() {
+  // Push the whole data set, read the row back and compare time + counts; only then is it "saved". keepalive lets it finish while the app is closing.
+  async function push(keepalive) {
+    if (!sess || launching || sy.phase === 'saving') return;
+    clearTimeout(pushTimer); clearTimeout(retryTimer);
+    syn('start');
+    var at = new Date().toISOString(), b = blob(), sent = { at: at, events: b.events.length, enrollments: b.enrollments.length };
     try {
-      var t = await token(); if (!t) return;
-      var at = new Date().toISOString();
-      await sb('/rest/v1/lesson_calendar_backup?on_conflict=user_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ user_id: sess.uid, data: blob(), updated_at: at }) }, t);
-      localStorage.setItem(LS_SYNC, at);
-      $('#sync').textContent = '클라우드에 저장됨';
-    } catch (e) { $('#sync').textContent = '이 기기에 저장됨 (클라우드 대기 중)'; }
+      var t = await token(); if (!t) throw new Error('로그인이 필요해요');
+      try { localStorage.setItem(LS_PEND, at); } catch (e) {}   // lets the next launch recognise this push as our own
+      var body = JSON.stringify({ user_id: sess.uid, data: b, updated_at: at });
+      var opt = { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: body };
+      if (keepalive && new Blob([body]).size < 60000) opt.keepalive = true;   // browsers cap keepalive bodies at 64KB
+      await sb('/rest/v1/lesson_calendar_backup?on_conflict=user_id', opt, t);
+      var rows = await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t);
+      var bad = Backup.verify(sent, rows[0]);
+      if (bad) throw new Error(bad);
+      cloudCounts = { events: sent.events, enrollments: sent.enrollments };
+      retryN = 0;
+      syn('ok', at);
+      if (sy.dirty) pushSoon();   // edited while saving
+    } catch (e) {
+      syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
+      retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
+    }
   }
-  function pushSoon() { if (!sess) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1500); }
+  function pushIfDirty() { if (sy.dirty) push(); }
+  function pushSoon() { if (!sess) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushIfDirty, 1500); }
+  function flush() { if (sess && sy.dirty && !launching) push(true); }   // app going to the background or closing: no waiting for the debounce
+  document.addEventListener('visibilitychange', function () { if (document.hidden) flush(); else if (sess && sy.dirty && !launching) push(); });
+  window.addEventListener('pagehide', flush);
+  window.addEventListener('online', function () { if (sess && sy.dirty && !launching) push(); });
   function adopt(data) {
     state.events = (data.events || []).filter(validEvent);
     state.enrollments = (data.enrollments || []).filter(validEnr).map(cleanEnr);
@@ -925,28 +978,42 @@ body { margin: 0; }
   }
   function byId(list) { var m = {}; list.forEach(function (x) { m[x.id] = x; }); return m; }
   function union(a, b) { var m = byId(a), n = byId(b); Object.keys(n).forEach(function (k) { m[k] = n[k]; }); return Object.keys(m).map(function (k) { return m[k]; }); }
-  // Pull once: newer cloud copy replaces this device; first login on a device that already has data merges by id; otherwise push.
+  // On launch/login. Cloud copy newer than this device's last backup: replace local only when nothing here is unbacked; otherwise ask.
   async function cloudStart(firstLogin) {
-    if (!sess) return;
+    if (!sess) { launching = false; return; }
+    launching = true;
+    var pushAfter = false;
     try {
       var t = await token();
-      var rows = await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t);
+      var rows = await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t), row = rows[0];
       var mine = state.events.length || state.enrollments.length;
-      var cloudNewer = rows.length && (localStorage.getItem(LS_SYNC) || '') < rows[0].updated_at;
-      if (rows.length && firstLogin && mine) {
-        var d = rows[0].data;
+      if (row) cloudCounts = { events: (row.data.events || []).length, enrollments: (row.data.enrollments || []).length };
+      if (row && firstLogin && mine) {
+        var d = row.data;
         adopt({ events: union(state.events, (d.events || []).filter(validEvent)), enrollments: union(state.enrollments, (d.enrollments || []).filter(validEnr).map(cleanEnr)), members: union(state.members, (d.members || []).filter(validMember)), settings: d.settings });
-        await push();
-      } else if (cloudNewer) {
-        adopt(rows[0].data);
-        localStorage.setItem(LS_SYNC, rows[0].updated_at);
-      } else await push();
-      $('#sync').textContent = '클라우드에 저장됨';
-    } catch (e) { $('#sync').textContent = '이 기기에 저장됨 (오프라인)'; }
+        pushAfter = true;
+      } else {
+        var act = Backup.guard({ cloudAt: row && row.updated_at, lastBackupAt: sy.lastBackupAt, dirty: sy.dirty, pendingAt: lsGet(LS_PEND) });
+        if (act === 'ask') {
+          $('#confm-no').textContent = '이 기기 것 유지';
+          var useCloud = await ask('백업이 서로 달라요', '이 기기에 백업 안 된 변경이 있는데, 클라우드에 더 새로운 백업이 있어요. 클라우드 것으로 바꾸면 이 기기의 변경은 사라져요 (임시 복사본은 남겨 둬요). 이 기기 것을 유지하면 클라우드를 덮어써요.', '클라우드 것으로 바꾸기');
+          $('#confm-no').textContent = '취소';
+          if (useCloud) { try { localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob())); } catch (e) {} act = 'pull'; }
+          else act = 'push';
+        }
+        if (act === 'pull') { adopt(row.data); clearTimeout(pushTimer); syn('clean', row.updated_at); }
+        else if (act === 'push') pushAfter = true;
+      }
+      renderSync();
+    } catch (e) {
+      syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
+      retryTimer = setTimeout(function () { cloudStart(); }, 15000);
+    } finally { launching = false; }
+    if (pushAfter || (sy.dirty && sy.phase === 'idle')) push();
   }
   function showCloud() {
     $('#cloud-out').hidden = !!sess; $('#cloud-in').hidden = !sess;
-    if (sess) $('#cloud-who').textContent = sess.email + ' 로그인 중 · 변경할 때마다 자동으로 클라우드에 저장돼요.';
+    if (sess) $('#cloud-who').textContent = sess.email + ' 로그인 중 · 변경하면 자동으로 클라우드에 백업돼요.';
   }
   // One button: log in; if the account does not exist yet, sign up with the same email + password
   async function auth() {
@@ -981,7 +1048,6 @@ body { margin: 0; }
     $('#month').classList.toggle('wk-title', wk);
     $('#prev').setAttribute('aria-label', wk ? '이전 주' : '이전 달');
     $('#next').setAttribute('aria-label', wk ? '다음 주' : '다음 달');
-    $('#sync').textContent = '이 기기에 저장됨';
   }
 
   function renderGrid() {
@@ -2591,7 +2657,7 @@ body { margin: 0; }
     }).catch(function () {});
   }
   function openBackup() {
-    showVersion();
+    showVersion(); renderSync();
     $('#backup-count').textContent = '저장된 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건';
     $('#s-inst').value = state.settings.instructor;
     $('#s-label').value = state.settings.label;
@@ -2663,7 +2729,9 @@ body { margin: 0; }
   $('#btn-backup-close').addEventListener('click', closeBackup);
   $('#backup').addEventListener('click', function (e) { if (e.target === $('#backup')) closeBackup(); });
   $('#btn-login').addEventListener('click', auth);
-  $('#btn-logout').addEventListener('click', function () { setSess(null); $('#sync').textContent = '이 기기에 저장됨'; });
+  $('#btn-logout').addEventListener('click', function () { setSess(null); });
+  $('#btn-pushnow').addEventListener('click', function () { push(); });
+  $('#sync').addEventListener('click', function () { if (!sess) openBackup(); else if (sy.phase !== 'saving' && Backup.status(sy) !== 'saved') push(); });
   $('#btn-export').addEventListener('click', exportBackup);
   $('#btn-import').addEventListener('click', function () { $('#file-import').click(); });
   $('#file-import').addEventListener('change', function (e) { var f = e.target.files && e.target.files[0]; if (f) importBackup(f); });

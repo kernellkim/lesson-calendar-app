@@ -2354,8 +2354,8 @@ body { margin: 0; }
   /* ---------- print layouts ---------- */
   function fill(v, cls) { return '<span class="fill' + (cls ? ' ' + cls : '') + '">' + esc(v) + '</span>'; }
   function signLeft(enr) {
-    var ps = enr.periodStart ? parse(enr.periodStart) : null, pe = enr.periodEnd ? parse(enr.periodEnd) : null;
-    var ap = parse(monthBounds(enr.month)[1]); // last day of the lesson month
+    var mb = monthBounds(enr.month), ps = parse(mb[0]), pe = parse(mb[1]);   // printed period = the whole month, whatever periodStart/periodEnd say
+    var ap = pe; // last day of the lesson month
     var part = function (s, i) { return s ? s.split(':')[i] : ''; };
     var rep = repDay(enr);
     var dayList = ENR_DAYS.map(function (d) { return d[0] === rep.day ? '<span class="ring">' + d[1] + '</span>' : d[1]; }).join(', ');

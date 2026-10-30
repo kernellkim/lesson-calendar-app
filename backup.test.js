@@ -62,3 +62,19 @@ assert.equal(B.stale('2026-10-29T11:00:00Z', now), true);
 assert.equal(B.stale('2026-10-30T01:00:00Z', now), false);
 assert.equal(B.stale('', now), false);
 console.log('OK backup');
+
+// ---- trainer seal in settings (persists through reload, cloud restore, backup import) ----
+{
+  const assert = require('assert'), fs = require('fs');
+  const B = require('./backup.js');
+  const valid = (v) => typeof v === 'string' && v.length < 20000 && /^[ML0-9. -]+$/.test(v);
+  assert.strictEqual(B.pickSeal('M1 1L2 2', '', valid), 'M1 1L2 2');          // reload / import / adopt with a seal
+  assert.strictEqual(B.pickSeal(undefined, 'M3 3L4 4', valid), 'M3 3L4 4');   // old backup or cloud copy without one keeps this device's
+  assert.strictEqual(B.pickSeal('<script>', 'M3 3L4 4', valid), 'M3 3L4 4');  // invalid never lands
+  assert.strictEqual(B.pickSeal('', '', valid), '');
+  // the three places that copy settings field by field must all use it
+  const src = fs.readFileSync(__dirname + '/index.html', 'utf8');
+  assert.strictEqual((src.match(/Backup\.pickSeal\(/g) || []).length, 3, 'initStore, adopt and import must each call pickSeal');
+  assert(/function blob\(\)[^\n]*settings: state\.settings/.test(src) && /exportedAt[^\n]*settings: state\.settings/.test(src), 'blob and export carry settings as a whole');
+  console.log('OK trainer seal');
+}

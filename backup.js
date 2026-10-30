@@ -69,7 +69,9 @@
   }
   // true when the app has been dirty for over 24h (dirtySince = ISO of the first unbacked edit)
   function stale(dirtySince, now) { return !!dirtySince && ((now || Date.now()) - ms(dirtySince)) > 86400000; }
-  var api = { init: init, next: next, status: status, text: text, guard: guard, verify: verify, stale: stale, when: when };
+  // trainer signature in settings: take a valid incoming one, else keep the current valid one, else ''. `valid` is the app's validSign.
+  function pickSeal(incoming, current, valid) { return valid(incoming) ? incoming : valid(current) ? current : ''; }
+  var api = { pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, verify: verify, stale: stale, when: when };
   root.Backup = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -373,6 +373,8 @@ body { margin: 0; }
 .paper .sig { display: block; margin: 0 auto; height: 8.6mm; width: auto; max-width: 100%; fill: none; stroke: #000; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .paper .seal { position: relative; display: inline-block; }
 .paper .seal-sig { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 12mm; width: auto; max-width: none; margin: 0; pointer-events: none; }
+.sigprev { height: calc(var(--u) * 3); width: auto; max-width: 100%; fill: none; stroke: var(--text); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+#signm { z-index: 11; }   /* the pad also opens above the 설정·백업 sheet */
 .sbig { display: flex; flex-direction: column; gap: calc(var(--u) * 0.625); }
 .sname { font-size: calc(var(--u) * 1.375); font-weight: 700; margin: 0; overflow-wrap: anywhere; }
 .sask { font-size: calc(var(--u) * 1.25); line-height: 1.4; margin: 0; }
@@ -586,6 +588,13 @@ body { margin: 0; }
     <p class="help" id="backup-count"></p>
     <p class="help" id="app-version"></p>
     <label class="fld"><span>강사명 (신청서와 현황에 인쇄돼요)</span><input type="text" id="s-inst" autocomplete="off"></label>
+    <div class="fld"><span>내 사인 (신청서 담당자 (인)에 인쇄돼요)</span>
+      <div id="s-seal-prev"></div>
+      <div class="stack">
+        <button type="button" class="btn" id="btn-seal" style="flex:none">내 사인 등록</button>
+        <button type="button" class="btn" id="btn-seal-del" style="flex:none" hidden>사인 지우기</button>
+      </div>
+    </div>
     <label class="fld"><span>종목 표기 (현황 오른쪽 위, 비워도 돼요)</span><input type="text" id="s-label" autocomplete="off" placeholder="예: 오전헬스"></label>
     <div class="stack">
       <button type="button" class="btn primary" id="btn-export" style="flex:none">백업 파일 내보내기</button>
@@ -784,7 +793,7 @@ body { margin: 0; }
     events: [],
     enrollments: [],
     members: [],
-    settings: { instructor: '김민기', label: '오전헬스', colors: {} },
+    settings: { instructor: '김민기', label: '오전헬스', trainerSeal: '', colors: {} },
     tab: 'cal',
     view: loadView(),
     mode: 'local',
@@ -887,6 +896,7 @@ body { margin: 0; }
       if (typeof s.instructor === 'string') state.settings.instructor = s.instructor;
       if (typeof s.label === 'string') state.settings.label = s.label;
       state.settings.colors = cleanColors(s.colors);
+      state.settings.trainerSeal = Backup.pickSeal(s.trainerSeal, state.settings.trainerSeal, validSign);
     }
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
     runMemberMigration();
@@ -980,7 +990,7 @@ body { margin: 0; }
     state.events = (data.events || []).filter(validEvent);
     state.enrollments = (data.enrollments || []).filter(validEnr).map(cleanEnr);
     state.members = (data.members || []).filter(validMember).map(cleanMember);
-    if (data.settings) { state.settings.instructor = data.settings.instructor || state.settings.instructor; state.settings.label = data.settings.label || state.settings.label; if (data.settings.colors) state.settings.colors = cleanColors(data.settings.colors); }
+    if (data.settings) { state.settings.instructor = data.settings.instructor || state.settings.instructor; state.settings.label = data.settings.label || state.settings.label; if (data.settings.colors) state.settings.colors = cleanColors(data.settings.colors); state.settings.trainerSeal = Backup.pickSeal(data.settings.trainerSeal, state.settings.trainerSeal, validSign); }
     runMemberMigration();
     applyMemberNames();
     syncAllEnrollments(true);
@@ -2377,7 +2387,7 @@ body { margin: 0; }
       '<p class="small">[단, 질병 등 부득이한 사정으로 취소 희망 시 소명자료를 제출 하여야 합니다.]</p>' +
       '<p class="sg">' + fill(enr.dong) + ' 동 ' + fill(enr.ho, 'w') + ' 호 성명 ' + fill(enr.name, 'w2') + ' <span class="seal">(인)' + sealSvg(enr) + '</span></p>' +
       '<p class="ph">연 락 처 : ' + esc(enr.phone) + '</p>' +
-      '<p class="dt">' + fill(ap.getFullYear()) + ' 년 ' + fill(ap.getMonth() + 1) + ' 월 ' + fill(ap.getDate()) + ' 일 &nbsp; 담당자 : ' + esc(state.settings.instructor) + ' (인)</p>' +
+      '<p class="dt">' + fill(ap.getFullYear()) + ' 년 ' + fill(ap.getMonth() + 1) + ' 월 ' + fill(ap.getDate()) + ' 일 &nbsp; 담당자 : ' + esc(state.settings.instructor) + ' <span class="seal">(인)' + sigSvg(state.settings.trainerSeal, 'sig seal-sig') + '</span></p>' +
       '<p class="brand">Acrovista Sports Community</p>' +
       '</div>';
   }
@@ -2588,10 +2598,11 @@ body { margin: 0; }
   });
 
   /* ---------- member signature: strokes stored as a compact SVG path (SW x SH box), ~1 KB each ---------- */
-  var SW = 300, SH = 100, PH = SH, signEv = null, signEnrId = null, strokes = [], cv = null;
+  var SW = 300, SH = 100, PH = SH, signEv = null, signEnrId = null, signTrainer = false, strokes = [], cv = null;
+  function sigSvg(path, cls) { return validSign(path) ? '<svg class="' + cls + '" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + path + '"/></svg>' : ''; }
   function sealSvg(enr) {
     var m = state.members.find(function (x) { return x.id === enr.memberId; });
-    return m && validSign(m.seal) ? '<svg class="sig seal-sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + m.seal + '"/></svg>' : '';
+    return m ? sigSvg(m.seal, 'sig seal-sig') : '';
   }
   function validSign(v) { return typeof v === 'string' && v.length < 20000 && /^[ML0-9. -]+$/.test(v); }
   function padXY(e) { var r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) / r.width * SW), Math.round((e.clientY - r.top) / r.height * PH)]; }
@@ -2628,6 +2639,12 @@ body { margin: 0; }
       '<p class="sask">위 내용이 맞으면 아래 칸에 사인해 주세요.</p>';
     openPad();
   }
+  function openTrainerSign() {
+    signEv = null; signEnrId = null; signTrainer = true; $('#sign-noshow').hidden = true;
+    $('#sign-title').textContent = '담당자 사인';
+    $('#sign-who').innerHTML = '<p class="sname">' + esc(state.settings.instructor) + ' 선생님</p><p class="sask">신청서에 인쇄될 사인이에요. 아래 칸에 사인해 주세요.</p>';
+    openPad();
+  }
   function openSign(ev) {
     signEv = ev; signEnrId = null; strokes = []; $('#sign-noshow').hidden = false;
     $('#sign-title').textContent = '회원 사인';
@@ -2636,7 +2653,7 @@ body { margin: 0; }
       '<p class="sask">아래 칸에 사인해 주세요.</p>';
     openPad();
   }
-  function closeSign() { $('#signm').hidden = true; document.body.classList.remove('locked'); signEv = null; signEnrId = null; }
+  function closeSign() { $('#signm').hidden = true; document.body.classList.remove('locked'); signEv = null; signEnrId = null; signTrainer = false; }
   cv = $('#signpad');
   cv.addEventListener('pointerdown', function (e) { cv.setPointerCapture(e.pointerId); strokes.push([padXY(e)]); padDraw(); });
   cv.addEventListener('pointermove', function (e) { if (!strokes.length || !cv.hasPointerCapture(e.pointerId)) return; var s = strokes[strokes.length - 1], p = padXY(e), q = s[s.length - 1]; if (p[0] !== q[0] || p[1] !== q[1]) { s.push(p); padDraw(); } });
@@ -2658,6 +2675,10 @@ body { margin: 0; }
   $('#sign-ok').addEventListener('click', async function () {
     if (!strokes.length) { toast('먼저 사인해 주세요'); return; }
     var d = fitStrokes().map(function (s) { return 'M' + s[0].join(' ') + s.slice(1).map(function (p) { return 'L' + p.join(' '); }).join('') + (s.length === 1 ? 'L' + (s[0][0] + 1) + ' ' + s[0][1] : ''); }).join('');
+    if (signTrainer) {
+      closeSign(); state.settings.trainerSeal = d; saveSettings(); renderSeal(); toast('내 사인을 저장했어요');
+      return;
+    }
     if (signEnrId) {
       var en = state.enrollments.find(function (x) { return x.id === signEnrId; }); closeSign();
       if (en) { Members.captureSeal(state.members.find(function (m) { return m.id === en.memberId; }), d, ymd(new Date()), validSign); putEnr(Object.assign({}, en, { confirm: d, confirmCount: enrCount(en), confirmFee: enrFee(en) })); toast('확인 사인을 받았어요'); }
@@ -2677,7 +2698,18 @@ body { margin: 0; }
       $('#app-version').textContent = k ? '버전 ' + k.replace('lesson-calendar-', '') : '';
     }).catch(function () {});
   }
+  function renderSeal() {
+    $('#s-seal-prev').innerHTML = sigSvg(state.settings.trainerSeal, 'sigprev');
+    $('#btn-seal').textContent = validSign(state.settings.trainerSeal) ? '다시 받기' : '내 사인 등록';
+    $('#btn-seal-del').hidden = !validSign(state.settings.trainerSeal);
+  }
+  $('#btn-seal').addEventListener('click', openTrainerSign);
+  $('#btn-seal-del').addEventListener('click', async function () {
+    if (!await ask('사인 지우기', '신청서에 인쇄되는 내 사인을 지워요.', '지우기')) return;
+    state.settings.trainerSeal = ''; saveSettings(); renderSeal();
+  });
   function openBackup() {
+    renderSeal();
     showVersion(); renderSync();
     $('#backup-count').textContent = '저장된 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건';
     $('#s-inst').value = state.settings.instructor;
@@ -2727,6 +2759,7 @@ body { margin: 0; }
         if (typeof data.settings.label === 'string') state.settings.label = data.settings.label;
         // keep colors already assigned on this device, add the imported ones
         state.settings.colors = Object.assign(cleanColors(data.settings.colors), state.settings.colors);
+        state.settings.trainerSeal = Backup.pickSeal(data.settings.trainerSeal, state.settings.trainerSeal, validSign);
         saveSettings();
       }
       if (data && Array.isArray(data.members)) {
@@ -2738,7 +2771,7 @@ body { margin: 0; }
       syncAllEnrollments(true);
       lsSave(); saveEnr(); render();
       $('#backup-count').textContent = '저장된 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건';
-      $('#s-inst').value = state.settings.instructor; $('#s-label').value = state.settings.label;
+      $('#s-inst').value = state.settings.instructor; $('#s-label').value = state.settings.label; renderSeal();
       var skipped = (evList.length - good.length) + (enList.length - goodEn.length);
       backupMsg('수업 ' + good.length + '개, 신청서 ' + goodEn.length + '건을 불러왔어요.' + (skipped ? ' (형식이 맞지 않는 ' + skipped + '개는 건너뛰었어요.)' : ''), true);
     } catch (err) { backupMsg('백업 파일을 읽지 못했어요. 이 앱에서 내보낸 .json 파일인지 확인해 주세요.', false); }

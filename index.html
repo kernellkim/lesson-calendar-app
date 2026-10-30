@@ -2800,7 +2800,13 @@ body { margin: 0; }
       }).catch(function () {});
     });
     // Only ask: reloading by itself could wipe a half-typed form
-    navigator.serviceWorker.addEventListener('controllerchange', function () { if (hadController) $('#upd').hidden = false; });
+    // Skip the bar when this page was already loaded from the new version (reopened app: the old worker was still in charge while the page came from the network)
+    var swVersion = function () { return fetch('sw.js', { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (t) { return (t.match(/CACHE = '([^']+)'/) || [])[1] || ''; }).catch(function () { return ''; }); };
+    var pageVersion = swVersion();
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadController) return;
+      Promise.all([pageVersion, swVersion()]).then(function (v) { if (!v[0] || !v[1] || v[0] !== v[1]) $('#upd').hidden = false; });
+    });
     $('#upd-reload').addEventListener('click', function () { location.reload(); });
   }
 

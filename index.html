@@ -355,7 +355,6 @@ body { margin: 0; }
 .paper.land { width: 297mm; height: 209mm; padding: 6mm; display: flex; gap: 8mm; }
 .paper.port { width: 210mm; height: 296mm; padding: 13mm 11mm; display: flex; flex-direction: column; }
 .paper .pf { flex: 1; min-width: 0; border: 0.7mm solid #000; padding: 5mm 7mm 4mm; display: flex; flex-direction: column; }
-.paper .pf.ghost { border: 0; visibility: hidden; }
 .paper .pt { margin: 0 0 2mm; text-align: center; font-size: 30px; font-weight: 500; letter-spacing: 0.35em; line-height: 1.2; }
 .paper .fill { display: inline-block; min-width: 2em; padding: 0 0.3em; border-bottom: 1px solid #000; text-align: center; line-height: 1.3; }
 .paper .fill.w { min-width: 6.5em; }
@@ -2417,7 +2416,7 @@ body { margin: 0; }
   function signPages(enr) {
     var lessons = signedLessons(enr), pages = [];
     for (var p = 0; p === 0 || p * 11 < lessons.length; p++) {
-      pages.push('<section class="paper land">' + (p === 0 ? signLeft(enr) : '<div class="pf ghost"></div>') + signRight(enr, lessons.slice(p * 11, p * 11 + 11), p * 11) + '</section>');
+      pages.push('<section class="paper land">' + signLeft(enr) + signRight(enr, lessons.slice(p * 11, p * 11 + 11), p * 11) + '</section>');
     }
     return pages;
   }

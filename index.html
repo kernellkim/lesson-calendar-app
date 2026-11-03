@@ -977,7 +977,7 @@ body { margin: 0; }
       retryN = 0;
       syn('ok', at);
       if (manual) toast('백업 완료');
-      histSave(t, b, at, manual).then(function (saved) { if (manual && saved) histLoad(); });   // not awaited: history can never hold up or fail the normal backup
+      histSave(t, b, at, manual).then(function (saved) { if (saved && (manual || !$('#hist-list').hidden)) histLoad(); });   // refresh the list when it is open   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
@@ -996,7 +996,7 @@ body { margin: 0; }
       var rows = await sb(HIST + '?select=id,created_at&order=created_at.desc&limit=200', {}, t);
       if (!manual && rows.length && now - new Date(rows[0].created_at) < 30 * 60000) return;   // automatic: 30 minutes apart; the 지금 백업 button always snapshots
       var todays = rows.filter(function (r) { return key(r.created_at) === key(at); });
-      var body = { data: b, events: b.events.length, enrollments: b.enrollments.length, created_at: at };
+      var body = { data: b, events: b.events.length, enrollments: b.enrollments.length, kind: manual ? 'manual' : 'auto', created_at: at };
       if (todays.length < 5) await sb(HIST, { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(Object.assign({ user_id: sess.uid }, body)) }, t);
       else await sb(HIST + '?id=eq.' + todays[0].id, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(body) }, t);
       var seen = {}, drop = [];   // rows are newest first: the first of each day is that day's last snapshot
@@ -1008,9 +1008,9 @@ body { margin: 0; }
   async function histLoad() {
     var box = $('#hist-list'); box.hidden = false; $('#btn-hist').textContent = '백업 이력 닫기';
     try {
-      var rows = await sb(HIST + '?select=id,created_at,events,enrollments&order=created_at.desc&limit=100', {}, await token());
+      var rows = await sb(HIST + '?select=id,created_at,events,enrollments,kind&order=created_at.desc&limit=100', {}, await token());
       box.innerHTML = rows.length ? rows.map(function (r) {
-        return '<div class="hrow"><span class="help">' + esc(Backup.when(r.created_at)) + ' · 수업 ' + r.events + '개 · 신청서 ' + r.enrollments + '건</span>' +
+        return '<div class="hrow"><span class="help">' + esc(Backup.when(r.created_at)) + (r.kind === 'auto' ? ' · 자동' : r.kind === 'manual' ? ' · 직접' : '') + ' · 수업 ' + r.events + '개 · 신청서 ' + r.enrollments + '건</span>' +
           '<button type="button" class="btn" data-hist="' + esc(r.id) + '" style="flex:none">이 시점으로 복원</button></div>';
       }).join('') : '<p class="help">아직 이력이 없어요. 백업하면 하루 최대 5개까지 쌓여요.</p>';
     } catch (e) { box.innerHTML = '<p class="help">이력을 불러오지 못했어요. 잠시 후 다시 눌러 주세요.</p>'; console.log('history load', e.message); }

@@ -24,6 +24,7 @@ create table if not exists public.lesson_calendar_backup_history (
   enrollments int not null default 0,
   created_at  timestamptz not null default now()
 );
+alter table public.lesson_calendar_backup_history add column if not exists kind text;   -- 'auto' | 'manual' (null = made before this column existed)
 create index if not exists lcbh_user_created on public.lesson_calendar_backup_history (user_id, created_at desc);
 
 alter table public.lesson_calendar_backup_history enable row level security;

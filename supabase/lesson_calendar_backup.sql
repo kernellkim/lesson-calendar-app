@@ -15,7 +15,7 @@ create policy lcb_insert on public.lesson_calendar_backup for insert to authenti
 create policy lcb_update on public.lesson_calendar_backup for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy lcb_delete on public.lesson_calendar_backup for delete to authenticated using (user_id = auth.uid());
 
--- 2) History: one snapshot per day (the app enforces that), newest 30 kept (the app prunes).
+-- 2) History: up to 5 snapshots a day; the day's last is kept 30 days, the others 3 days (the app enforces both).
 create table if not exists public.lesson_calendar_backup_history (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,

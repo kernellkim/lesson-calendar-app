@@ -958,7 +958,7 @@ body { margin: 0; }
     return sess && sess.access;
   }
   // Push the whole data set, read the row back and compare time + counts; only then is it "saved". keepalive lets it finish while the app is closing.
-  async function push(keepalive) {
+  async function push(keepalive, manual) {
     if (!sess || launching || sy.phase === 'saving') return;
     clearTimeout(pushTimer); clearTimeout(retryTimer);
     syn('start');
@@ -976,24 +976,24 @@ body { margin: 0; }
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
       syn('ok', at);
-      histSave(t, b, at);   // not awaited: history can never hold up or fail the normal backup
+      histSave(t, b, at, manual);   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
       retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
     }
   }
-  // ---- backup history: up to 5 snapshots a day, at least 1 minute apart. After the 5th, the day's last one is refreshed, so it always holds the day's final backup.
+  // ---- backup history: up to 5 snapshots a day, automatic ones at least 30 minutes apart (the 지금 백업 button ignores the gap). After the 5th, the day's last one is refreshed, so it always holds the day's final backup.
   // The day's last snapshot is kept 30 days; the other ones are deleted after 3 days. Any failure is only logged; the next push retries. ----
   var HIST = '/rest/v1/lesson_calendar_backup_history', DAY = 86400000;
-  async function histSave(t, b, at) {
+  async function histSave(t, b, at, manual) {
     try {
       var now = new Date(at), key = function (iso) { var d = new Date(iso); return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); };
       var ago = function (days) { return encodeURIComponent(new Date(now - days * DAY).toISOString()); };
       var quiet = { method: 'DELETE', headers: { Prefer: 'return=minimal' } };
       await sb(HIST + '?created_at=lt.' + ago(30), quiet, t);
       var rows = await sb(HIST + '?select=id,created_at&order=created_at.desc&limit=200', {}, t);
-      if (rows.length && now - new Date(rows[0].created_at) < 60000) return;
+      if (!manual && rows.length && now - new Date(rows[0].created_at) < 30 * 60000) return;   // automatic: 30 minutes apart; the 지금 백업 button always snapshots
       var todays = rows.filter(function (r) { return key(r.created_at) === key(at); });
       var body = { data: b, events: b.events.length, enrollments: b.enrollments.length, created_at: at };
       if (todays.length < 5) await sb(HIST, { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(Object.assign({ user_id: sess.uid }, body)) }, t);
@@ -2832,7 +2832,7 @@ body { margin: 0; }
   $('#backup').addEventListener('click', function (e) { if (e.target === $('#backup')) closeBackup(); });
   $('#btn-login').addEventListener('click', auth);
   $('#btn-logout').addEventListener('click', function () { setSess(null); });
-  $('#btn-pushnow').addEventListener('click', function () { push(); });
+  $('#btn-pushnow').addEventListener('click', function () { push(false, true); });
   $('#sync').addEventListener('click', function () { if (!sess) openBackup(); else if (sy.phase !== 'saving' && Backup.status(sy) !== 'saved') push(); });
   $('#btn-export').addEventListener('click', exportBackup);
   $('#btn-import').addEventListener('click', function () { $('#file-import').click(); });

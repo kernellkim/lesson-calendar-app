@@ -2186,7 +2186,8 @@ body { margin: 0; }
         '요일·시간을 바꿔 저장하면 서명 안 된 오늘 이후 수업이 바뀌어요. 서명한 수업은 그대로예요.';
     }
     $('#btn-edel').hidden = !enr;
-    $('#btn-eseal').hidden = !(enr && sealSvg(enr));
+    var sm = enr && state.members.find(function (x) { return x.id === enr.memberId; });
+    $('#btn-eseal').hidden = !(sm && validSign(sm.seal));
     $('#g-del-help').hidden = !enr;
     $('#g-msg').hidden = true;
     $('#btn-esave').disabled = false;
@@ -2367,7 +2368,10 @@ body { margin: 0; }
     var ap = pe; // last day of the lesson month
     var part = function (s, i) { return s ? s.split(':')[i] : ''; };
     var rep = repDay(enr);
-    var dayList = ENR_DAYS.map(function (d) { return d[0] === rep.day ? '<span class="ring">' + d[1] + '</span>' : d[1]; }).join(', ');
+    // ring every weekday that has a lesson this month (no lessons: the 신청서's own days); the time below stays the one representative time
+    var ringed = lessonsFor(enr).filter(function (l) { return l.date.slice(0, 7) === enr.month; }).map(function (l) { return parse(l.date).getDay(); });
+    if (!ringed.length) ringed = enr.days;
+    var dayList = ENR_DAYS.map(function (d) { return ringed.indexOf(d[0]) >= 0 ? '<span class="ring">' + d[1] + '</span>' : d[1]; }).join(', ');
     return '<div class="pf lf">' +
       '<h3 class="pt">신 청 서</h3>' +
       '<p style="padding-left:20mm">' + fill(Number(enr.month.slice(5))) + '월 헬스 <u>소그룹, 개인 강습</u></p>' +
@@ -2600,8 +2604,7 @@ body { margin: 0; }
   var SW = 300, SH = 100, PH = SH, signEv = null, signEnrId = null, signTrainer = false, strokes = [], cv = null;
   function sigSvg(path, cls) { return validSign(path) ? '<svg class="' + cls + '" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + path + '"/></svg>' : ''; }
   function sealSvg(enr) {
-    var m = state.members.find(function (x) { return x.id === enr.memberId; });
-    return m ? sigSvg(m.seal, 'sig seal-sig') : '';
+    return sigSvg(enr.confirm, 'sig seal-sig');   // the month's 강습 확인 signature from the 현황 step; blank when there is none (no fallback to the first seal)
   }
   function validSign(v) { return typeof v === 'string' && v.length < 20000 && /^[ML0-9. -]+$/.test(v); }
   function padXY(e) { var r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) / r.width * SW), Math.round((e.clientY - r.top) / r.height * PH)]; }

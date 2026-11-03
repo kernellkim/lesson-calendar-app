@@ -619,7 +619,7 @@ body { margin: 0; }
         <button type="button" class="btn" id="btn-logout" style="flex:none">로그아웃</button>
       </div>
       <div class="stack"><button type="button" class="btn" id="btn-hist" style="flex:none">백업 이력 보기</button></div>
-      <div id="hist-list"></div>
+      <div id="hist-list" hidden></div>
     </div>
     <div class="actions"><button type="button" class="btn" id="btn-backup-close">닫기</button></div>
   </div>
@@ -976,7 +976,8 @@ body { margin: 0; }
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
       syn('ok', at);
-      histSave(t, b, at, manual).then(function (saved) { if (manual && saved) { toast('백업했고 이력에도 남겼어요'); histLoad(); } });   // not awaited: history can never hold up or fail the normal backup
+      if (manual) toast('백업 완료');
+      histSave(t, b, at, manual).then(function (saved) { if (manual && saved) histLoad(); });   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
@@ -1005,7 +1006,7 @@ body { margin: 0; }
     } catch (e) { console.log('history skipped', e.message); return false; }
   }
   async function histLoad() {
-    var box = $('#hist-list');
+    var box = $('#hist-list'); box.hidden = false; $('#btn-hist').textContent = '백업 이력 닫기';
     try {
       var rows = await sb(HIST + '?select=id,created_at,events,enrollments&order=created_at.desc&limit=100', {}, await token());
       box.innerHTML = rows.length ? rows.map(function (r) {
@@ -1025,7 +1026,10 @@ body { margin: 0; }
     } catch (e) { toast('복원하지 못했어요. 데이터는 그대로예요'); console.log('history restore', e.message); }
   }
   $('#hist-list').addEventListener('click', function (e) { var b = e.target.closest('[data-hist]'); if (b) histRestore(b.dataset.hist); });
-  $('#btn-hist').addEventListener('click', histLoad);
+  $('#btn-hist').addEventListener('click', function () {
+    if ($('#hist-list').hidden) histLoad();
+    else { $('#hist-list').hidden = true; $('#btn-hist').textContent = '백업 이력 보기'; }
+  });
   function pushIfDirty() { if (sy.dirty) push(); }
   function pushSoon() { if (!sess) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushIfDirty, 1500); }
   function flush() { if (sess && sy.dirty && !launching) push(true); }   // app going to the background or closing: no waiting for the debounce

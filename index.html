@@ -288,6 +288,7 @@ body { margin: 0; }
 [hidden] { display: none !important; }
 .linkbtn { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; margin-block: -14px; justify-content: center; background: none; border: 0; padding: 0;   /* 44px tap area without making the line taller */
   color: var(--accent-text); font-size: calc(var(--u) * 0.75); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.hrow { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 0.5); margin-top: calc(var(--u) * 0.5); }
 .help { margin: 0; font-size: calc(var(--u) * 0.8125); color: var(--text-muted); }
 .stack { display: flex; flex-direction: column; gap: calc(var(--u) * 0.5); }
 
@@ -617,6 +618,8 @@ body { margin: 0; }
         <button type="button" class="btn primary" id="btn-pushnow" style="flex:none">지금 백업</button>
         <button type="button" class="btn" id="btn-logout" style="flex:none">로그아웃</button>
       </div>
+      <div class="stack"><button type="button" class="btn" id="btn-hist" style="flex:none">백업 이력 보기</button></div>
+      <div id="hist-list"></div>
     </div>
     <div class="actions"><button type="button" class="btn" id="btn-backup-close">닫기</button></div>
   </div>
@@ -973,12 +976,47 @@ body { margin: 0; }
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
       syn('ok', at);
+      histSave(t, b, at);   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
       retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
     }
   }
+  // ---- backup history: at most one snapshot per local day, newest 30 kept. Any failure is only logged; the next push retries. ----
+  var HIST = '/rest/v1/lesson_calendar_backup_history';
+  async function histSave(t, b, at) {
+    try {
+      var d = new Date(); d.setHours(0, 0, 0, 0);
+      var today = await sb(HIST + '?select=id&limit=1&created_at=gte.' + encodeURIComponent(d.toISOString()), {}, t);
+      if (today.length) return;
+      await sb(HIST, { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ user_id: sess.uid, data: b, events: b.events.length, enrollments: b.enrollments.length, created_at: at }) }, t);
+      var old = await sb(HIST + '?select=id&order=created_at.desc&offset=30', {}, t);
+      if (old.length) await sb(HIST + '?id=in.(' + old.map(function (r) { return r.id; }).join(',') + ')', { method: 'DELETE', headers: { Prefer: 'return=minimal' } }, t);
+    } catch (e) { console.log('history skipped', e.message); }
+  }
+  async function histLoad() {
+    var box = $('#hist-list');
+    try {
+      var rows = await sb(HIST + '?select=id,created_at,events,enrollments&order=created_at.desc&limit=30', {}, await token());
+      box.innerHTML = rows.length ? rows.map(function (r) {
+        return '<div class="hrow"><span class="help">' + esc(Backup.when(r.created_at)) + ' · 수업 ' + r.events + '개 · 신청서 ' + r.enrollments + '건</span>' +
+          '<button type="button" class="btn" data-hist="' + esc(r.id) + '" style="flex:none">이 시점으로 복원</button></div>';
+      }).join('') : '<p class="help">아직 이력이 없어요. 백업이 된 다음 날부터 하루 한 번씩 쌓여요.</p>';
+    } catch (e) { box.innerHTML = '<p class="help">이력을 불러오지 못했어요. 잠시 후 다시 눌러 주세요.</p>'; console.log('history load', e.message); }
+  }
+  async function histRestore(id) {
+    try {
+      var rows = await sb(HIST + '?select=data,created_at&id=eq.' + encodeURIComponent(id), {}, await token()), row = rows[0];
+      if (!row) throw new Error('not found');
+      if (!await ask('이 시점으로 복원', Backup.when(row.created_at) + ' 백업(수업 ' + (row.data.events || []).length + '개 · 신청서 ' + (row.data.enrollments || []).length + '건)으로 되돌려요. 지금 이 기기의 데이터는 임시 복사본으로 남겨 둬요.', '복원')) return;
+      localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob()));   // abort if this cannot be saved
+      adopt(row.data); markDirty();   // dirty: the cloud's current copy becomes this restored one
+      toast('복원했어요');
+    } catch (e) { toast('복원하지 못했어요. 데이터는 그대로예요'); console.log('history restore', e.message); }
+  }
+  $('#hist-list').addEventListener('click', function (e) { var b = e.target.closest('[data-hist]'); if (b) histRestore(b.dataset.hist); });
+  $('#btn-hist').addEventListener('click', histLoad);
   function pushIfDirty() { if (sy.dirty) push(); }
   function pushSoon() { if (!sess) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushIfDirty, 1500); }
   function flush() { if (sess && sy.dirty && !launching) push(true); }   // app going to the background or closing: no waiting for the debounce

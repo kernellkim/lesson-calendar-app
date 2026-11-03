@@ -976,7 +976,7 @@ body { margin: 0; }
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
       syn('ok', at);
-      histSave(t, b, at, manual);   // not awaited: history can never hold up or fail the normal backup
+      histSave(t, b, at, manual).then(function (saved) { if (manual && saved) { toast('백업했고 이력에도 남겼어요'); histLoad(); } });   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
@@ -1001,7 +1001,8 @@ body { margin: 0; }
       var seen = {}, drop = [];   // rows are newest first: the first of each day is that day's last snapshot
       rows.forEach(function (r) { var k = key(r.created_at); if (!seen[k]) seen[k] = 1; else if (now - new Date(r.created_at) > 3 * DAY) drop.push(r.id); });
       if (drop.length) await sb(HIST + '?id=in.(' + drop.join(',') + ')', quiet, t);
-    } catch (e) { console.log('history skipped', e.message); }
+      return true;
+    } catch (e) { console.log('history skipped', e.message); return false; }
   }
   async function histLoad() {
     var box = $('#hist-list');

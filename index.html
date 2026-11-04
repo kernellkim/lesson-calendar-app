@@ -288,6 +288,7 @@ body { margin: 0; }
 [hidden] { display: none !important; }
 .linkbtn { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; margin-block: -14px; justify-content: center; background: none; border: 0; padding: 0;   /* 44px tap area without making the line taller */
   color: var(--accent-text); font-size: calc(var(--u) * 0.75); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.htabs { display: flex; gap: calc(var(--u) * 0.5); overflow-x: auto; margin-top: calc(var(--u) * 0.5); }
 .hrow { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 0.5); margin-top: calc(var(--u) * 0.5); }
 .help { margin: 0; font-size: calc(var(--u) * 0.8125); color: var(--text-muted); }
 .stack { display: flex; flex-direction: column; gap: calc(var(--u) * 0.5); }
@@ -976,7 +977,7 @@ body { margin: 0; }
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
       syn('ok', at);
-      if (manual) toast('백업 완료');
+      if (manual) { toast('백업 완료'); histOff = 0; }
       histSave(t, b, at, manual).then(function (saved) { if (saved && (manual || !$('#hist-list').hidden)) histLoad(); });   // refresh the list when it is open   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
@@ -1005,14 +1006,28 @@ body { margin: 0; }
       return true;
     } catch (e) { console.log('history skipped', e.message); return false; }
   }
+  // History list: one tab per day that has snapshots (오늘, 1일 전, ...); 오늘 is the default and is always there.
+  var histRows = [], histOff = 0;
+  function dayNo(d) { return Math.round(new Date(d.getFullYear(), d.getMonth(), d.getDate()) / DAY); }
+  function histRender() {
+    var box = $('#hist-list'), today = dayNo(new Date()), offs = { 0: 1 }, two = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (!histRows.length) { box.innerHTML = '<p class="help">아직 이력이 없어요. 백업하면 하루 최대 5개까지 쌓여요.</p>'; return; }
+    histRows.forEach(function (r) { offs[today - dayNo(new Date(r.created_at))] = 1; });
+    var days = Object.keys(offs).map(Number).filter(function (n) { return n >= 0; }).sort(function (a, b) { return a - b; });
+    if (days.indexOf(histOff) < 0) histOff = 0;
+    var tabs = days.map(function (n) { return '<button type="button" class="btn' + (n === histOff ? ' primary' : '') + '" data-htab="' + n + '" style="flex:none">' + (n ? n + '일 전' : '오늘') + '</button>'; }).join('');
+    var rows = histRows.filter(function (r) { return today - dayNo(new Date(r.created_at)) === histOff; });
+    box.innerHTML = '<div class="htabs">' + tabs + '</div>' + (rows.length ? rows.map(function (r) {
+      var d = new Date(r.created_at);
+      return '<div class="hrow"><span class="help">' + two(d.getHours()) + ':' + two(d.getMinutes()) + (r.kind === 'auto' ? ' · 자동' : r.kind === 'manual' ? ' · 직접' : '') + ' · 수업 ' + r.events + '개 · 신청서 ' + r.enrollments + '건</span>' +
+        '<button type="button" class="btn" data-hist="' + esc(r.id) + '" style="flex:none">이 시점으로 복원</button></div>';
+    }).join('') : '<p class="help">이 날은 이력이 없어요.</p>');
+  }
   async function histLoad() {
     var box = $('#hist-list'); box.hidden = false; $('#btn-hist').textContent = '백업 이력 닫기';
     try {
-      var rows = await sb(HIST + '?select=id,created_at,events,enrollments,kind&order=created_at.desc&limit=100', {}, await token());
-      box.innerHTML = rows.length ? rows.map(function (r) {
-        return '<div class="hrow"><span class="help">' + esc(Backup.when(r.created_at)) + (r.kind === 'auto' ? ' · 자동' : r.kind === 'manual' ? ' · 직접' : '') + ' · 수업 ' + r.events + '개 · 신청서 ' + r.enrollments + '건</span>' +
-          '<button type="button" class="btn" data-hist="' + esc(r.id) + '" style="flex:none">이 시점으로 복원</button></div>';
-      }).join('') : '<p class="help">아직 이력이 없어요. 백업하면 하루 최대 5개까지 쌓여요.</p>';
+      histRows = await sb(HIST + '?select=id,created_at,events,enrollments,kind&order=created_at.desc&limit=100', {}, await token());
+      histRender();
     } catch (e) { box.innerHTML = '<p class="help">이력을 불러오지 못했어요. 잠시 후 다시 눌러 주세요.</p>'; console.log('history load', e.message); }
   }
   async function histRestore(id) {
@@ -1025,9 +1040,13 @@ body { margin: 0; }
       toast('복원했어요');
     } catch (e) { toast('복원하지 못했어요. 데이터는 그대로예요'); console.log('history restore', e.message); }
   }
-  $('#hist-list').addEventListener('click', function (e) { var b = e.target.closest('[data-hist]'); if (b) histRestore(b.dataset.hist); });
+  $('#hist-list').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-hist]'), t = e.target.closest('[data-htab]');
+    if (b) histRestore(b.dataset.hist);
+    else if (t) { histOff = Number(t.dataset.htab); histRender(); }
+  });
   $('#btn-hist').addEventListener('click', function () {
-    if ($('#hist-list').hidden) histLoad();
+    if ($('#hist-list').hidden) { histOff = 0; histLoad(); }
     else { $('#hist-list').hidden = true; $('#btn-hist').textContent = '백업 이력 보기'; }
   });
   function pushIfDirty() { if (sy.dirty) push(); }

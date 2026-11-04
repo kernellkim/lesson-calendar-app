@@ -376,6 +376,7 @@ body { margin: 0; }
 .paper .seal-sig { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 12mm; width: auto; max-width: none; margin: 0; pointer-events: none; }
 .sigprev { height: calc(var(--u) * 3); width: auto; max-width: 100%; fill: none; stroke: var(--text); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 #signm { z-index: 11; }   /* the pad also opens above the 설정·백업 sheet */
+#confm { z-index: 12; }   /* confirm popups (노쇼 처리 etc.) must sit above the sign pad */
 .sbig { display: flex; flex-direction: column; gap: calc(var(--u) * 0.625); }
 .sname { font-size: calc(var(--u) * 1.375); font-weight: 700; margin: 0; overflow-wrap: anywhere; }
 .sask { font-size: calc(var(--u) * 1.25); line-height: 1.4; margin: 0; }

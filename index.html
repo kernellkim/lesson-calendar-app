@@ -2289,6 +2289,8 @@ body { margin: 0; }
     var mode = repMode();   // 'one' | 'week' when adding from the calendar, else null (the 신청서 form as before)
     if (mode) enr.days = [parse(eState.date).getDay()];
     if (!enr.name) return eErr('성명을 입력해 주세요.');
+    // new member with no 동/호 yet: placeholder X동 000호 so the schedule can be booked now and fixed later
+    if (!eState.editing && !enr.dong && !enr.ho) { enr.dong = 'X'; enr.ho = '000'; }
     if (!enr.dong) return eErr('동을 입력해 주세요. 예: A');
     if (!enr.ho) return eErr('호수를 입력해 주세요. 예: 101');
     if (!enr.month) return eErr('강습 월을 선택해 주세요.');
@@ -2303,7 +2305,7 @@ body { margin: 0; }
     if (mem0 && Members.clean(enr.name) !== mem0.name && !await renameMember(mem0.id, enr.name)) return;
     // same 동 + 호 and month already has a 신청서 (a family): share it (the first name stays), one lesson set per person
     var form = enr;
-    var same = eState.editing ? null : state.enrollments.find(function (e) { return e.dong === enr.dong && e.ho === enr.ho && e.month === enr.month; });
+    var same = eState.editing ? null : state.enrollments.find(function (e) { return e.dong === enr.dong && e.ho === enr.ho && e.month === enr.month && !(e.dong === 'X' && e.ho === '000'); });   // unknown X/000 people are never one family
     if (same) {
       enr = Object.assign({}, same, { days: same.days.concat(form.days.filter(function (d) { return same.days.indexOf(d) < 0; })) });
       // new weekdays keep the time typed in this form, even when the shared 신청서 has another default

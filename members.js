@@ -201,7 +201,7 @@
           mine.sort(function (a, b) { return a.month < b.month ? -1 : 1; })[0];
         var y = +month.slice(0, 4), m = +month.slice(5), last = new Date(y, m, 0).getDate();
         enr = { id: d.newId ? d.newId() : 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), memberId: toId, month: month, name: to.name,
-          dong: src ? src.dong : '', ho: src ? src.ho : '', phone: src ? src.phone : '', periodStart: month + '-01', periodEnd: month + '-' + (last < 10 ? '0' : '') + last,
+          dong: src ? src.dong : 'X', ho: src ? src.ho : '000', phone: src ? src.phone : '', periodStart: month + '-01', periodEnd: month + '-' + (last < 10 ? '0' : '') + last,
           days: [], count: 0, start: src ? src.start : '10:00', end: src ? src.end : '10:50', fee: 0, appliedOn: '' };
         made.push(enr);
       }

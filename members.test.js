@@ -128,7 +128,7 @@ console.log('OK members');
   assert.ok(d2.enrollments.some((e) => e.id === made[0].id));
   d2 = mk(); d2.members.push({ id: 'm3', name: '새사람' }); M.moveLessons(d2, ['x2', 'x3'], 'm3');
   const made3 = M.ensureEnrollments(d2, ['x2', 'x3'], 'm3');
-  assert.strictEqual(made3.length, 1); assert.deepStrictEqual([made3[0].month, made3[0].dong, made3[0].ho, made3[0].name], ['2026-10', '', '', '새사람'], 'brand-new member: blank 동/호');
+  assert.strictEqual(made3.length, 1); assert.deepStrictEqual([made3[0].month, made3[0].dong, made3[0].ho, made3[0].name], ['2026-10', 'X', '000', '새사람'], 'brand-new member: placeholder X 000');
   assert.strictEqual(made3[0].periodEnd, '2026-10-31');
   assert.ok(d2.events.filter((e) => e.memberId === 'm3').every((e) => e.enrollmentId === made3[0].id));
   assert.strictEqual(M.ensureEnrollments(d2, ['x2', 'x3'], 'm3').length, 0, 'second call creates nothing');

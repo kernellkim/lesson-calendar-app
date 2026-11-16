@@ -1213,6 +1213,7 @@ body { margin: 0; }
       $('#list').innerHTML = '<li class="empty"><b>등록된 수업이 없어요</b>아래 수업 추가 버튼으로 이 날짜에 수업을 넣어 보세요.</li>';
       return;
     }
+    function unknownUnit(l) { var n = state.enrollments.find(function (x) { return x.id === l.enrollmentId; }); return !!n && n.dong === 'X' && n.ho === '000'; }
     $('#list').innerHTML = list.map(function (e) {
       var st = e.status || 'scheduled';
       var pill = st === 'done' ? '<span class="pill done">' + (e.noshow ? '노쇼' : '완료') + '</span>' : st === 'cancelled' ? '<span class="pill cancelled">취소</span>' : '';
@@ -1222,6 +1223,7 @@ body { margin: 0; }
           '<span class="time">' + esc(e.start) + '<small>' + esc(e.end) + '</small></span>' +
           '<span class="who"><b>' + esc(e.title) + '</b>' + (e.memo ? '<em>' + esc(e.memo) + '</em>' : '') + pill + '</span>' +
         '</button>' +
+        (unknownUnit(e) ? '<b class="unk" title="동·호수 미정" aria-label="동·호수 미정">!</b>' : '') +
         '<button type="button" class="check" data-toggle="' + esc(e.id) + '" aria-pressed="' + (st === 'done') + '" aria-label="' + esc(e.title) + ' 수업 사인"><span>' + CHECK + '</span></button>' +
       '</li>';
     }).join('');
@@ -2032,7 +2034,6 @@ body { margin: 0; }
           '<span class="unit">' + esc(e.dong) + '동<small>' + esc(e.ho) + '호</small></span>' +
           '<span class="who"><b>' + esc(listName(e)) + '</b><em>' + esc(meta) + '</em></span>' +
         '</button>' +
-        (e.dong === 'X' && e.ho === '000' ? '<b class="unk" title="동·호수 미정" aria-label="동·호수 미정">!</b>' : '') +
         '<button type="button" class="csign ' + (!validSign(e.confirm) ? '' : confirmStale(e) ? 'stale' : 'ok') + '" data-econfirm="' + esc(e.id) + '">' +
           (!validSign(e.confirm) ? '사인 받기' : confirmStale(e) ? '변경됨 · 다시 사인' : '사인 완료 ✓') + '</button>' +
         '<button type="button" class="prt" data-eprint="' + esc(e.id) + '" aria-label="' + esc(e.name) + ' 신청서와 사인지 출력">' + PRINTER + '</button>' +

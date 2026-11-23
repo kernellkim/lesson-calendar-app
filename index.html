@@ -1114,9 +1114,20 @@ body { margin: 0; }
   function pushIfDirty() { if (sy.dirty) push(); }
   function pushSoon() { if (!sess) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushIfDirty, 1500); }
   function flush() { if (sess && sy.dirty && !launching) push(true); }   // app going to the background or closing: no waiting for the debounce
-  document.addEventListener('visibilitychange', function () { if (document.hidden) flush(); else if (sess && sy.dirty && !launching) push(); });
+  /* Coming back to the app (visible, pageshow, focus, online): look at the cloud again, at most once a minute (cloudStart does the guard + the local copy).
+     Inside the cooldown only a pending, guarded push runs. Nothing is replaced while a sheet or popup is open (e.g. a resident is signing): it waits and tries again. */
+  var lastCheck = 0, resumeWait = null;
+  function resume() {
+    if (!sess || launching || asking || sy.phase === 'saving') return;
+    if (document.querySelector('.scrim:not([hidden]), .pv:not([hidden])')) { clearTimeout(resumeWait); resumeWait = setTimeout(resume, 10000); return; }
+    if (Date.now() - lastCheck < 60000) { if (sy.dirty) push(); return; }
+    cloudStart();
+  }
+  document.addEventListener('visibilitychange', function () { if (document.hidden) flush(); else resume(); });
   window.addEventListener('pagehide', flush);
-  window.addEventListener('online', function () { if (sess && sy.dirty && !launching) push(); });
+  window.addEventListener('pageshow', resume);
+  window.addEventListener('focus', resume);
+  window.addEventListener('online', resume);
   function adopt(data) {
     state.events = (data.events || []).filter(validEvent);
     state.enrollments = (data.enrollments || []).filter(validEnr).map(cleanEnr);
@@ -1132,7 +1143,7 @@ body { margin: 0; }
   // On launch/login. Cloud copy newer than this device's last backup: replace local only when nothing here is unbacked; otherwise ask.
   async function cloudStart(firstLogin) {
     if (!sess) { launching = false; return; }
-    launching = true;
+    launching = true; lastCheck = Date.now();
     var pushAfter = false;
     try {
       var t = await token();

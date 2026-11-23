@@ -1021,9 +1021,29 @@ body { margin: 0; }
       return useCloud ? 'pull' : 'push';
     } finally { $('#confm-no').textContent = '취소'; asking = false; }
   }
+  /* Before any of this device's data is replaced by the cloud's: a timestamped copy under lesson-calendar-pre-pull-<time> (the newest 5 are kept).
+     Returns false when it could not be saved (storage full): the caller must then NOT replace anything. Not part of the backup file or cloud payload. */
+  var COPY = 'lesson-calendar-pre-pull-';
+  function keepCopy() {
+    var copies = function () { return Object.keys(localStorage).filter(function (k) { return k.indexOf(COPY) === 0; }).sort(); };
+    try {
+      var raw = JSON.stringify(blob()), key = COPY + new Date().toISOString();
+      for (;;) {
+        try { localStorage.setItem(key, raw); break; }
+        catch (e) { var old = copies(); if (!old.length) return false; localStorage.removeItem(old[0]); }   // full: drop the oldest copy and try again
+      }
+      copies().slice(0, -5).forEach(function (k) { localStorage.removeItem(k); });
+      var used = 0; Object.keys(localStorage).forEach(function (k) { used += k.length + (localStorage.getItem(k) || '').length; });
+      if (used > 4e6) toast('저장 공간이 거의 찼어요. 백업 파일을 내보내고 정리해 주세요.');   // iOS allows about 5M characters
+      return localStorage.getItem(key) === raw;
+    } catch (e) { return false; }
+  }
+  // Replace this device's data with the cloud row, after keeping a copy. False = nothing was changed.
   function takeCloud(row) {
-    try { localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob())); } catch (e) {}
+    if (!keepCopy()) { toast('이 기기 데이터를 임시 보관하지 못해서 클라우드 데이터를 가져오지 않았어요'); return false; }
     adopt(row.data); clearTimeout(pushTimer); syn('clean', row.updated_at);
+    toast('클라우드의 최신 데이터로 바꿨어요');
+    return true;
   }
   // The user chose this device's data: the cloud's current copy is now the known base, and this device's data is unbacked on top of it
   function keepMine(row) { syn('clean', row.updated_at); syn('edit'); }
@@ -1077,7 +1097,7 @@ body { margin: 0; }
       var rows = await sb(HIST + '?select=data,created_at&id=eq.' + encodeURIComponent(id), {}, await token()), row = rows[0];
       if (!row) throw new Error('not found');
       if (!await ask('이 시점으로 복원', Backup.when(row.created_at) + ' 백업(수업 ' + (row.data.events || []).length + '개 · 신청서 ' + (row.data.enrollments || []).length + '건)으로 되돌려요. 지금 이 기기의 데이터는 임시 복사본으로 남겨 둬요.', '복원')) return;
-      localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob()));   // abort if this cannot be saved
+      if (!keepCopy()) throw new Error('copy failed');   // abort if this cannot be saved
       adopt(row.data); markDirty();   // dirty: the cloud's current copy becomes this restored one
       toast('복원했어요');
     } catch (e) { toast('복원하지 못했어요. 데이터는 그대로예요'); console.log('history restore', e.message); }
@@ -1121,6 +1141,7 @@ body { margin: 0; }
       if (row) cloudCounts = { events: (row.data.events || []).length, enrollments: (row.data.enrollments || []).length };
       if (row && firstLogin && mine) {
         var d = row.data;
+        if (!keepCopy()) throw new Error('이 기기 데이터를 임시 보관하지 못했어요');
         adopt({ events: union(state.events, (d.events || []).filter(validEvent)), enrollments: union(state.enrollments, (d.enrollments || []).filter(validEnr).map(cleanEnr)), members: unionMembers(state.members, (d.members || []).filter(validMember)), settings: d.settings });
         keepMine(row); pushAfter = true;   // merged on purpose: the cloud's current copy is the base
       } else {

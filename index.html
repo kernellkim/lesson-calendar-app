@@ -962,17 +962,23 @@ body { margin: 0; }
   }
   // Push the whole data set, read the row back and compare time + counts; only then is it "saved". keepalive lets it finish while the app is closing.
   async function push(keepalive, manual) {
-    if (!sess || launching || sy.phase === 'saving') return;
+    if (!sess || launching || asking || sy.phase === 'saving') return;
     clearTimeout(pushTimer); clearTimeout(retryTimer);
     syn('start');
     var at = new Date().toISOString(), b = blob(), sent = { at: at, events: b.events.length, enrollments: b.enrollments.length };
     try {
       var t = await token(); if (!t) throw new Error('로그인이 필요해요');
+      var pend = lsGet(LS_PEND);   // an earlier push that may have landed; read before it is replaced below
       try { localStorage.setItem(LS_PEND, at); } catch (e) {}   // lets the next launch recognise this push as our own
-      var body = JSON.stringify({ user_id: sess.uid, data: b, updated_at: at });
-      var opt = { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: body };
-      if (keepalive && new Blob([body]).size < 60000) opt.keepalive = true;   // browsers cap keepalive bodies at 64KB
-      await sb('/rest/v1/lesson_calendar_backup?on_conflict=user_id', opt, t);
+      var theirs = await cloudWrite(t, b, at, pend, keepalive);
+      if (theirs) {   // the cloud has a copy this device has not seen: nothing was written, the user decides
+        syn('conflict');
+        var side = await askSide(theirs);
+        if (side === 'pull') takeCloud(theirs);
+        else if (side === 'push') { keepMine(theirs); push(false, manual); }
+        else retryTimer = setTimeout(pushIfDirty, 5000);   // another popup was open
+        return;
+      }
       var rows = await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t);
       var bad = Backup.verify(sent, rows[0]);
       if (bad) throw new Error(bad);
@@ -987,6 +993,40 @@ body { margin: 0; }
       retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
     }
   }
+  /* The cloud row is only replaced while it still has the updated_at this device last synced (a conditional PATCH, so the
+     check and the write are one atomic step and work even while the app is closing). Returns null when written,
+     or the newer cloud row when this device is behind. No SQL change needed: the table's own update policy covers it. */
+  async function cloudWrite(t, b, at, pend, keepalive) {
+    var url = '/rest/v1/lesson_calendar_backup', body = JSON.stringify({ data: b, updated_at: at });
+    async function patch(was) {
+      var o = { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: body };
+      if (keepalive && new Blob([body]).size < 60000) o.keepalive = true;   // browsers cap keepalive bodies at 64KB
+      var done = await sb(url + '?select=updated_at&user_id=eq.' + sess.uid + '&updated_at=eq.' + encodeURIComponent(was), o, t);
+      return done.length > 0;
+    }
+    if (sy.lastBackupAt && await patch(sy.lastBackupAt)) return null;
+    var row = (await sb(url + '?select=data,updated_at', {}, t))[0];
+    if (!row) { await sb(url, { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ user_id: sess.uid, data: b, updated_at: at }) }, t); return null; }   // first backup ever
+    if (!Backup.foreign(row.updated_at, sy.lastBackupAt, pend) && await patch(row.updated_at)) return null;   // our own earlier push, unconfirmed
+    return row;
+  }
+  var asking = false;   // the "백업이 서로 달라요" popup is open: no pushes meanwhile
+  // Returns 'pull' (use the cloud copy), 'push' (keep this device's and overwrite the cloud), or null when another popup is open. Never decided automatically.
+  async function askSide(row) {
+    if (!$('#confm').hidden) return null;
+    asking = true;
+    try {
+      $('#confm-no').textContent = '이 기기 것 유지';
+      var useCloud = await ask('백업이 서로 달라요', '클라우드에 이 기기가 모르는 더 새로운 백업이 있어요 (수업 ' + (row.data.events || []).length + '개 · 신청서 ' + (row.data.enrollments || []).length + '건). 클라우드 것으로 바꾸면 이 기기의 변경은 사라져요 (임시 복사본은 남겨 둬요). 이 기기 것을 유지하면 클라우드를 덮어써요.', '클라우드 것으로 바꾸기');
+      return useCloud ? 'pull' : 'push';
+    } finally { $('#confm-no').textContent = '취소'; asking = false; }
+  }
+  function takeCloud(row) {
+    try { localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob())); } catch (e) {}
+    adopt(row.data); clearTimeout(pushTimer); syn('clean', row.updated_at);
+  }
+  // The user chose this device's data: the cloud's current copy is now the known base, and this device's data is unbacked on top of it
+  function keepMine(row) { syn('clean', row.updated_at); syn('edit'); }
   // ---- backup history: up to 5 snapshots a day, automatic ones at least 30 minutes apart (the 지금 백업 button ignores the gap). After the 5th, the day's last one is refreshed, so it always holds the day's final backup.
   // The day's last snapshot is kept 30 days; the other ones are deleted after 3 days. Any failure is only logged; the next push retries. ----
   var HIST = '/rest/v1/lesson_calendar_backup_history', DAY = 86400000;
@@ -1082,17 +1122,16 @@ body { margin: 0; }
       if (row && firstLogin && mine) {
         var d = row.data;
         adopt({ events: union(state.events, (d.events || []).filter(validEvent)), enrollments: union(state.enrollments, (d.enrollments || []).filter(validEnr).map(cleanEnr)), members: unionMembers(state.members, (d.members || []).filter(validMember)), settings: d.settings });
-        pushAfter = true;
+        keepMine(row); pushAfter = true;   // merged on purpose: the cloud's current copy is the base
       } else {
         var act = Backup.guard({ cloudAt: row && row.updated_at, lastBackupAt: sy.lastBackupAt, dirty: sy.dirty, pendingAt: lsGet(LS_PEND) });
         if (act === 'ask') {
-          $('#confm-no').textContent = '이 기기 것 유지';
-          var useCloud = await ask('백업이 서로 달라요', '이 기기에 백업 안 된 변경이 있는데, 클라우드에 더 새로운 백업이 있어요. 클라우드 것으로 바꾸면 이 기기의 변경은 사라져요 (임시 복사본은 남겨 둬요). 이 기기 것을 유지하면 클라우드를 덮어써요.', '클라우드 것으로 바꾸기');
-          $('#confm-no').textContent = '취소';
-          if (useCloud) { try { localStorage.setItem('lesson-calendar-pre-cloud-copy', JSON.stringify(blob())); } catch (e) {} act = 'pull'; }
-          else act = 'push';
+          var side = await askSide(row);
+          if (side === 'push') keepMine(row);
+          act = side || 'none';
+          if (!side) retryTimer = setTimeout(function () { cloudStart(); }, 5000);   // another popup was open
         }
-        if (act === 'pull') { adopt(row.data); clearTimeout(pushTimer); syn('clean', row.updated_at); }
+        if (act === 'pull') takeCloud(row);
         else if (act === 'push') pushAfter = true;
       }
       renderSync();

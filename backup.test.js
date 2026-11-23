@@ -48,6 +48,17 @@ assert.equal(B.guard({ cloudAt: T2, lastBackupAt: T1, dirty: true }), 'ask');   
 assert.equal(B.guard({ cloudAt: T2, lastBackupAt: T1, dirty: true, pendingAt: T2 }), 'push'); // it was our own push
 assert.equal(B.guard({ cloudAt: '2026-10-30T10:00:00+00:00', lastBackupAt: T1, dirty: true, pendingAt: T2 }), 'push'); // same instant, other format
 
+// push guard: only our own known cloud row may be overwritten
+assert.equal(B.foreign(null, '', ''), false);                       // no cloud row yet: first insert
+assert.equal(B.foreign(T1, T1, ''), false);                         // cloud is what we last synced
+assert.equal(B.foreign('2026-10-29T10:00:00+00:00', T1, ''), false); // same instant, other format
+assert.equal(B.foreign(T2, T1, ''), true);                          // another device pushed since
+assert.equal(B.foreign(T2, '', ''), true);                          // never synced, but the cloud has data
+assert.equal(B.foreign(T2, T1, T2), false);                         // our own push landed, app closed before confirming
+assert.equal(B.foreign(T2, T1, T1), true);
+s = B.next(B.next(B.next(B.init({ loggedIn: true }), 'edit'), 'start'), 'conflict');
+assert.equal(S(s), 'dirty'); assert.equal(s.dirty, true);           // refused push keeps the edits unbacked
+
 // read-back verify
 const sent = { at: T2, events: 2, enrollments: 1 };
 const row = { updated_at: '2026-10-30T10:00:00+00:00', data: { events: [{}, {}], enrollments: [{}] } };

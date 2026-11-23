@@ -20,6 +20,8 @@
     else if (ev === 'fail') { s.phase = arg2 ? 'offline' : 'error'; s.error = arg || ''; }
     // local data was just replaced by the cloud copy (or confirmed equal): nothing unbacked
     else if (ev === 'clean') { s.phase = 'idle'; s.error = ''; s.dirty = false; s.lastBackupAt = arg; }
+    // a push was refused because the cloud has a newer copy: nothing was written, local data is still unbacked
+    else if (ev === 'conflict') { s.phase = 'idle'; s.error = ''; }
     return s;
   }
   function status(st) {
@@ -58,6 +60,11 @@
     if (cloudNewer) return c.dirty ? 'ask' : 'pull';
     return c.dirty ? 'push' : 'none';
   }
+  // Push guard: true when the cloud row is neither the one this device last synced (lastBackupAt) nor its own unconfirmed push (pendingAt)
+  function foreign(cloudAt, lastBackupAt, pendingAt) {
+    if (!cloudAt) return false;
+    return ms(cloudAt) !== ms(lastBackupAt) && !(pendingAt && ms(pendingAt) === ms(cloudAt));
+  }
   // sent = { at, events, enrollments } (what we pushed); row = the row read back. Returns null when equal, else a message
   function verify(sent, row) {
     if (!row) return '클라우드에서 백업을 찾지 못했어요';
@@ -71,7 +78,7 @@
   function stale(dirtySince, now) { return !!dirtySince && ((now || Date.now()) - ms(dirtySince)) > 86400000; }
   // trainer signature in settings: take a valid incoming one, else keep the current valid one, else ''. `valid` is the app's validSign.
   function pickSeal(incoming, current, valid) { return valid(incoming) ? incoming : valid(current) ? current : ''; }
-  var api = { pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, verify: verify, stale: stale, when: when };
+  var api = { pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, foreign: foreign, verify: verify, stale: stale, when: when };
   root.Backup = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -377,7 +377,6 @@ body { margin: 0; }
 .paper .rows th { height: 10mm; }
 .paper .rows td { height: 10.4mm; }
 .paper .rows .n { width: 12%; }
-.paper .rows .rn { font-size: 0.8em; margin-left: 1.5mm; }
 .paper .rows td { padding: 0.5mm 2mm; }
 .paper .sig { display: block; margin: 0 auto; height: 8.6mm; width: auto; max-width: 100%; fill: none; stroke: #000; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .paper .seal { position: relative; display: inline-block; }
@@ -2739,10 +2738,10 @@ body { margin: 0; }
   }
   function signRight(enr, rows, from) {
     var y = enr.month.slice(0, 4), m = Number(enr.month.slice(5));
-    var body = '', family = enrPeople(enr).length > 0;   // a family 신청서 names the person on every row
+    var body = '';
     for (var i = 0; i < 11; i++) {
       var l = rows[i];
-      body += '<tr><td class="n">' + (from + i + 1) + '</td><td>' + (l ? esc(longDate(l.date)) + (family ? '<span class="rn">' + esc(personName(l)) + '</span>' : '') : '') + '</td><td>' + (l ? esc(l.start + ' ~ ' + l.end) : '') + '</td><td>' + (l && l.noshow ? 'N/S' : l && validSign(l.sign) ? '<svg class="sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + l.sign + '"/></svg>' : '') + '</td></tr>';
+      body += '<tr><td class="n">' + (from + i + 1) + '</td><td>' + (l ? esc(longDate(l.date)) : '') + '</td><td>' + (l ? esc(l.start + ' ~ ' + l.end) : '') + '</td><td>' + (l && l.noshow ? 'N/S' : l && validSign(l.sign) ? '<svg class="sig" viewBox="0 0 ' + SW + ' ' + SH + '"><path d="' + l.sign + '"/></svg>' : '') + '</td></tr>';
     }
     return '<div class="pf">' +
       '<h3 class="pt" style="letter-spacing:0.05em">선생님 보관용</h3>' +

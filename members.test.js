@@ -292,6 +292,23 @@ console.log('OK members');
   // lessons of other months, signed/past lessons and other members do not count
   assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-12-04', '2026-12-11'], '12:00'), '2026-11-24')), '10:00', 'other month: ignored');
   assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-11-13', '2026-11-20'], '12:00'), '2026-11-24')), '10:00', 'past lessons: ignored');
+  // plan change: only plan-made, unsigned, future lessons are redone; hand-moved/added (manual), signed, past, other-member lessons stay
+  const rs = (id, date, start, memberId, extra) => Object.assign({ id, date, start, end: '10:50', memberId, status: 'scheduled', enrollmentId: 'e' }, extra);
+  const oldPlan = [{ day: 2, start: '09:00', end: '09:50', memberId: 'a' }, { day: 5, start: '10:00', end: '10:50', memberId: 'b' }];
+  const evs = [
+    rs('plan1', '2026-12-01', '09:00', 'a'),                          // Tue 09:00 a: made by the plan -> delete
+    rs('plan2', '2026-12-04', '10:00', 'b'),                          // Fri 10:00 b: made by the plan -> delete
+    rs('manual1', '2026-12-08', '09:00', 'a', { manual: true }),      // moved/added by hand (even though it looks like the plan) -> keep
+    rs('moved', '2026-12-09', '15:00', 'a'),                          // not marked, but not a plan time: a hand edit from before the flag -> keep
+    rs('makeup', '2026-12-03', '09:00', 'a', { manual: true }),
+    rs('signed', '2026-12-15', '09:00', 'a', { status: 'done' }),     // signed -> keep (not scheduled)
+    rs('past', '2026-11-03', '09:00', 'a'),                           // before today -> not touched
+    rs('other', '2026-12-08', '09:00', 'c'),                          // member without a row -> not touched
+    rs('elsewhere', '2026-12-08', '09:00', 'a', { enrollmentId: 'x' })// another 신청서 -> not touched
+  ];
+  const sp = M.regenSplit(evs, 'e', { a: 1, b: 1 }, oldPlan, '2026-11-24');
+  assert.deepStrictEqual(sp.del.map((x) => x.id), ['plan1', 'plan2'], 'only plan-made unsigned future lessons are deleted');
+  assert.deepStrictEqual(sp.keep.map((x) => x.id), ['manual1', 'moved', 'makeup'], 'hand-made lessons are kept');
   // legacy fields for older apps
   const lf = M.legacyFields(mig, 'a');
   assert.deepStrictEqual([lf.days, lf.start, lf.slots], [[2, 4, 5], '09:00', { 4: { start: '10:00', end: '10:50' }, 5: { start: '10:00', end: '10:50' } }]);

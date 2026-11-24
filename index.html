@@ -251,9 +251,12 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
 textarea { resize: vertical; }
 input::placeholder, textarea::placeholder { color: var(--text-muted); }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 0; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.slot { display: grid; grid-template-columns: calc(var(--u) * 1.5) minmax(0, 3fr) minmax(0, 2fr);   /* the time field needs the wider share ("오전 10:00" + clock) */
+.slot { display: grid; grid-template-columns: calc(var(--u) * 1.5) minmax(0, 3fr) minmax(0, 2fr) max(44px, calc(var(--u) * 2.75));   /* the time field needs the wider share ("오전 10:00" + clock) */
   gap: calc(var(--u) * 0.625); align-items: center; margin-bottom: calc(var(--u) * 0.375); }
-.slot b { font-size: calc(var(--u) * 0.875); color: var(--text-muted); }
+.slot b { grid-row: 1 / 3; font-size: calc(var(--u) * 0.875); color: var(--text-muted); }
+.slot .who { grid-column: 2 / -1; }   /* whose time this is: its own line, the time and length below */
+.slot-add { margin: 0 0 calc(var(--u) * 0.75) calc(var(--u) * 2.125); }
+.slot-fam { display: flex; gap: calc(var(--u) * 0.625); margin-top: calc(var(--u) * 0.5); }
 .row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--u) * 9.5)), 1fr));   /* two columns while both fields fit, otherwise they stack instead of being cut off */
   gap: calc(var(--u) * 0.625); }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -1496,6 +1499,7 @@ body { margin: 0; }
         if (old.enrollmentId) upd.enrollmentId = old.enrollmentId;
         if (old.sign && st === 'done') upd.sign = old.sign;
         if (old.noshow && st === 'done') upd.noshow = true;
+        if (old.manual) upd.manual = true;
         var after = [];
         if (old.id && (old.start !== start || old.end !== end)) {
           // later lessons on the same weekday, still unsigned
@@ -1507,6 +1511,8 @@ body { margin: 0; }
             after.forEach(function (x) { x.start = start; x.end = end; });
           }
         }
+        // moved by hand (another day, or a new time for this lesson only): the 신청서 form never deletes or regenerates it. A time change for all later lessons is a plan-level change, not a hand edit.
+        if (old.id && (old.date !== date || ((old.start !== start || old.end !== end) && !after.length))) upd.manual = true;
         if (memberChanged) {
           // one batch: this lesson's edit, any time change on later lessons, and the member change (memberId + 신청서 link) for the chosen scope
           state.events[state.events.findIndex(function (x) { return x.id === upd.id; })] = upd;
@@ -1867,7 +1873,7 @@ body { margin: 0; }
     var start = fromMin(t.start), end = fromMin(t.start + d.dur);
     if (t.date === ev.date && start === ev.start && end === ev.end) return;   // dropped where it was: nothing to do
     var prev = Object.assign({}, ev);
-    put(Object.assign({}, ev, { date: t.date, start: start, end: end }));
+    put(Object.assign({}, ev, { date: t.date, start: start, end: end, manual: true }));
     undoData = { move: prev };
     $('#undo-text').textContent = '수업을 이동했어요';
     $('#undo').hidden = false;
@@ -2214,18 +2220,13 @@ body { margin: 0; }
   });
 
   /* ---- enrollment sheet ---- */
-  var eState = { editing: null, periodDirty: false, edur: 50, slots: {}, date: null };   // date: set when a new lesson is added from the calendar
+  var eState = { editing: null, periodDirty: false, edur: 50, plan: [], self: '', extra: [], def: { start: '', end: '' }, date: null };   // date: set when a new lesson is added from the calendar
   function setDays(list) {
     document.querySelectorAll('#g-days input').forEach(function (i) { i.checked = list.indexOf(Number(i.value)) >= 0; });
   }
   function readEnr() {
     var days = [];
     document.querySelectorAll('#g-days input:checked').forEach(function (i) { days.push(Number(i.value)); });
-    var slots = {}, n = 0;
-    days.forEach(function (d) {
-      var t = eState.slots[d];
-      if (t && (t.start !== $('#g-start').value || t.end !== $('#g-end').value)) { slots[d] = t; n++; }
-    });
     var enr = {
       id: eState.editing || 'pending',
       month: $('#g-month').value,
@@ -2237,21 +2238,54 @@ body { margin: 0; }
       periodEnd: $('#g-pe').value,
       days: days,
       start: $('#g-start').value,
-      end: $('#g-end').value
+      end: $('#g-end').value,
+      plan: eState.plan.filter(function (p) { return days.indexOf(p.day) >= 0; }).map(function (p) { return Object.assign({}, p); })   // memberId: '' = this form's person, 'new:Name' = a family member added here
     };
-    if (n) enr.slots = slots;
     return enr;
   }
-  // one row per checked weekday: its own start time and length (defaults to the 시작/수업 시간 above)
-  function renderSlots() {
-    var def = { start: $('#g-start').value, end: $('#g-end').value }, html = '';
-    ENR_DAYS.forEach(function (d) {
-      if (!document.querySelector('#g-days input[value="' + d[0] + '"]').checked) return;
-      var t = eState.slots[d[0]] || def, dur = toMin(t.end) - toMin(t.start) === 30 ? 30 : 50;
-      html += '<div class="slot" data-d="' + d[0] + '"><b>' + d[1] + '</b><input type="time" step="300" value="' + esc(t.start) + '">' +
-        '<select><option value="30"' + (dur === 30 ? ' selected' : '') + '>30분</option><option value="50"' + (dur === 50 ? ' selected' : '') + '>50분</option></select></div>';
+  // The weekly plan: per checked weekday one or more rows [whose time] [start] [length]. A family shares one 신청서, so each row says which member it is for.
+  // memberId '' = the person of this form (not created yet when typing a new name), 'new:Name' = a family member added in this form
+  function slotLabel(id) {
+    if (!id) return $('#g-name').value.trim() || '본인';
+    if (id.indexOf('new:') === 0) return id.slice(4);
+    var m = state.members.find(function (x) { return x.id === id; });
+    return m ? m.name : '?';
+  }
+  function slotPeople() {
+    var seen = {}, out = [], typed = Members.norm($('#g-name').value);
+    var add = function (id) { if (!seen[id]) { seen[id] = 1; out.push(id); } };
+    add(eState.self);
+    Members.householdMemberIds(memberData(), $('#g-dong').value.trim().toUpperCase().replace(/동$/, '').trim(), $('#g-ho').value.trim().replace(/호$/, '').trim()).forEach(function (id) {
+      var m = state.members.find(function (x) { return x.id === id; });
+      if (m && !(!eState.self && Members.norm(m.name) === typed)) add(id);   // a new form for an already known name: that person is the form's own
     });
-    $('#g-slots').innerHTML = html ? '<p class="help">요일마다 시간이 다르면 아래에서 바꿔 주세요. 안 바꾸면 위의 시간이 쓰여요.</p>' + html : '';
+    eState.extra.forEach(function (n) { add('new:' + n); });
+    eState.plan.forEach(function (p) { add(p.memberId); });
+    return out;
+  }
+  function renderSlots() {
+    var def = { start: $('#g-start').value, end: $('#g-end').value }, html = '', people = slotPeople();
+    var on = ENR_DAYS.filter(function (d) { return document.querySelector('#g-days input[value="' + d[0] + '"]').checked; });
+    on.forEach(function (d) { if (!eState.plan.some(function (p) { return p.day === d[0]; })) eState.plan.push({ day: d[0], start: def.start, end: def.end, memberId: eState.self }); });
+    on.forEach(function (d) {
+      var mine = eState.plan.map(function (p, i) { return { p: p, i: i }; }).filter(function (x) { return x.p.day === d[0]; });
+      mine.forEach(function (x, k) {
+        var t = x.p, dur = toMin(t.end) - toMin(t.start) === 30 ? 30 : 50;
+        html += '<div class="slot" data-i="' + x.i + '"><b>' + (k ? '' : d[1]) + '</b><select class="who" aria-label="누구 시간">' +
+          people.map(function (id) { return '<option value="' + esc(id) + '"' + (id === t.memberId ? ' selected' : '') + '>' + esc(slotLabel(id)) + '</option>'; }).join('') +
+          '</select><input type="time" step="300" value="' + esc(t.start) + '"><select class="dur"><option value="30"' + (dur === 30 ? ' selected' : '') + '>30분</option><option value="50"' + (dur === 50 ? ' selected' : '') + '>50분</option></select>' +
+          (mine.length > 1 ? '<button type="button" class="btn slot-x" aria-label="이 시간 지우기">×</button>' : '<span></span>') + '</div>';
+      });
+      html += '<button type="button" class="btn slot-add" data-d="' + d[0] + '">+ ' + d[1] + '요일 시간 추가</button>';
+    });
+    $('#g-slots').innerHTML = html ? '<p class="help">요일마다 시간을 정해 주세요. 가족이 한 신청서를 같이 쓰면 시간마다 누구 수업인지 고르고, 같은 요일에 시간을 더 넣을 수 있어요.</p>' + html +
+      '<div class="slot-fam"><input type="text" id="g-fam" placeholder="가족 이름 추가" autocomplete="off"><button type="button" class="btn" id="g-fam-add">추가</button></div>' : '';
+  }
+  // the top 시작/수업 시간 is only the default: rows still at the old default follow it
+  function retime() {
+    var n = { start: $('#g-start').value, end: $('#g-end').value };
+    eState.plan.forEach(function (p) { if (p.start === eState.def.start && p.end === eState.def.end) { p.start = n.start; p.end = n.end; } });
+    eState.def = n;
   }
   // Lessons are 30 or 50 minutes; show the matching button (anything else falls back to 50)
   function syncDur() {
@@ -2275,8 +2309,8 @@ body { margin: 0; }
     return null;
   }
   // dates that already have a lesson of this member (exact duplicate rule of the 신청서 form)
-  function dupDate(d, personId, enrId) {
-    return state.events.some(function (x) { return x.date === d && x.status !== 'cancelled' && memberOf(x) === personId && (!x.enrollmentId || x.enrollmentId === enrId); });
+  function dupDate(d, personId, enrId, ignore) {   // ignore: ids of lessons about to be deleted
+    return state.events.some(function (x) { return !(ignore && ignore[x.id]) && x.date === d && x.status !== 'cancelled' && memberOf(x) === personId && (!x.enrollmentId || x.enrollmentId === enrId); });
   }
   function updateRepUI() {
     var mode = repMode(), box = $('#g-repeat-box');
@@ -2317,7 +2351,10 @@ body { margin: 0; }
     $('#g-start').value = enr ? enr.start : start || '10:00';
     $('#g-end').value = enr ? enr.end : start ? fromMin(Math.min(toMin(start) + 50, 1439)) : '10:50';
     syncDur();
-    eState.slots = enr && enr.slots ? JSON.parse(JSON.stringify(enr.slots)) : {};
+    eState.self = enr ? enr.memberId || '' : '';
+    eState.plan = enr ? JSON.parse(JSON.stringify(Members.cleanPlan(enr.plan) || Members.planFromSlots(enr))) : [];
+    eState.extra = [];
+    eState.def = { start: $('#g-start').value, end: $('#g-end').value };
     var names = {};
     state.members.forEach(function (m) { names[m.name] = 1; });
     $('#g-members').innerHTML = Object.keys(names).sort().map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
@@ -2350,7 +2387,8 @@ body { margin: 0; }
     if (!$('#g-phone').value) $('#g-phone').value = prev.phone;
     if (!document.querySelector('#g-days input:checked')) setDays(prev.days);
     $('#g-start').value = prev.start; $('#g-end').value = prev.end;
-    eState.slots = prev.slots ? JSON.parse(JSON.stringify(prev.slots)) : {};
+    eState.plan = JSON.parse(JSON.stringify(Members.cleanPlan(prev.plan) || Members.planFromSlots(prev))).map(function (p) { p.memberId = p.memberId === prev.memberId ? '' : p.memberId; return p; });
+    eState.def = { start: prev.start, end: prev.end };
     syncDur();
     updateEnrHints();
   }
@@ -2378,24 +2416,34 @@ body { margin: 0; }
     // same 동 + 호 and month already has a 신청서 (a family): share it (the first name stays), one lesson set per person
     var form = enr;
     var same = eState.editing ? null : state.enrollments.find(function (e) { return e.dong === enr.dong && e.ho === enr.ho && e.month === enr.month && !(e.dong === 'X' && e.ho === '000'); });   // unknown X/000 people are never one family
-    if (same) {
-      enr = Object.assign({}, same, { days: same.days.concat(form.days.filter(function (d) { return same.days.indexOf(d) < 0; })) });
-      // new weekdays keep the time typed in this form, even when the shared 신청서 has another default
-      var sl = Object.assign({}, same.slots);
-      form.days.forEach(function (d) {
-        var t = slotOf(form, d);
-        if (same.days.indexOf(d) < 0 && (t.start !== same.start || t.end !== same.end)) sl[d] = t;
-      });
-      if (Object.keys(sl).length) enr.slots = sl;
-    }
+    if (same) enr = Object.assign({}, same);   // the shared 신청서 keeps its own fields; this form's rows are merged into its plan below
     var hk = enr.dong + '|' + enr.ho;
     var cur = eState.editing && state.enrollments.find(function (e) { return e.id === eState.editing; });
     // the person this form is for: when editing, the 신청서's own member; otherwise the member of the typed name (a new name becomes a new member)
     var person = cur && cur.memberId && state.members.find(function (m) { return m.id === cur.memberId; }) || Members.ensure(memberData(), form.name, hk);
-    if (state.members.indexOf(person) < 0) state.members.push(person);
+    var addedM = [];   // members created by this save, removed again when it is cancelled
+    if (state.members.indexOf(person) < 0) { state.members.push(person); addedM.push(person); }
     if (!same) enr.memberId = person.id;
     enr.name = (state.members.find(function (m) { return m.id === enr.memberId; }) || person).name;
     enr.id = eState.editing || (same ? same.id : newId());
+    // the plan rows of this form with their people resolved ('' = this form's person, 'new:Name' = a family member added in the form)
+    var rows = (mode ? [{ day: parse(eState.date).getDay(), start: form.start, end: form.end, memberId: '' }] : form.plan).map(function (p) {
+      var id = p.memberId;
+      if (!id) id = person.id;
+      else if (id.indexOf('new:') === 0) { var nm = Members.ensure(memberData(), id.slice(4), hk); if (state.members.indexOf(nm) < 0) { state.members.push(nm); addedM.push(nm); } id = nm.id; }
+      return { day: p.day, start: p.start, end: p.end, memberId: id };
+    });
+    // a single lesson added to a shared 신청서 never changes its plan; everything else writes the plan, and days/start/end/slots from it for older apps
+    if (!(same && mode === 'one')) {
+      var basePlan = same ? Members.cleanPlan(same.plan) || Members.planFromSlots(same) : [], have = {};
+      basePlan.forEach(function (p) { have[p.day + '|' + p.memberId] = 1; });
+      var pl = Members.cleanPlan(basePlan.concat(rows.filter(function (p) { return !have[p.day + '|' + p.memberId]; })));
+      if (pl) {
+        var lf = Members.legacyFields(pl, enr.memberId);
+        enr.plan = pl; enr.days = lf.days; enr.start = lf.start; enr.end = lf.end;
+        if (lf.slots) enr.slots = lf.slots; else delete enr.slots;
+      }
+    }
     // editing days/time/period: redo this person's unsigned lessons from today on, signed ones stay
     var old = eState.editing ? state.enrollments.find(function (e) { return e.id === enr.id; }) : null;
     // the form does not carry the resident's confirm signature (or the applied date): keep them when editing, or saving would erase them
@@ -2403,25 +2451,46 @@ body { margin: 0; }
       if (validSign(old.confirm)) { enr.confirm = old.confirm; enr.confirmCount = old.confirmCount; enr.confirmFee = old.confirmFee; }
       if (old.appliedOn && !enr.appliedOn) enr.appliedOn = old.appliedOn;
     }
-    var changed = !!old && [old.days.slice().sort().join(), old.start, old.end, JSON.stringify(old.slots || {}), old.periodStart, old.periodEnd].join('|') !==
-      [enr.days.slice().sort().join(), enr.start, enr.end, JSON.stringify(enr.slots || {}), enr.periodStart, enr.periodEnd].join('|');
+    var planKey = function (e) { return JSON.stringify(Members.cleanPlan(e.plan) || Members.planFromSlots(e)); };
+    var changed = !!old && [old.days.slice().sort().join(), old.start, old.end, JSON.stringify(old.slots || {}), old.periodStart, old.periodEnd, planKey(old)].join('|') !==
+      [enr.days.slice().sort().join(), enr.start, enr.end, JSON.stringify(enr.slots || {}), enr.periodStart, enr.periodEnd, planKey(enr)].join('|');
     var today = ymd(new Date());
+    var del = [], keepN = 0, delIds = {};
     if (changed) {
-      state.events = state.events.filter(function (x) {
-        return !(x.enrollmentId === enr.id && memberOf(x) === memberOf(old) && x.status === 'scheduled' && x.date >= today);
-      });
+      // only lessons the plan made are redone: every family member with a row in the old or new plan; hand-moved/added ones (manual) and members without a row keep theirs
+      var redo = {}; redo[old.memberId] = 1;
+      var oldPlan = Members.cleanPlan(old.plan) || Members.planFromSlots(old);
+      oldPlan.concat(rows).forEach(function (p) { redo[p.memberId] = 1; });
+      var split = Members.regenSplit(state.events, enr.id, redo, oldPlan, today);
+      del = split.del; keepN = split.keep.length;
+      del.forEach(function (x) { delIds[x.id] = true; });
       gen = enr.days.length > 0;
     }
-    var allDates = gen ? (mode ? repDates() : genDates(form)) : [];
-    var dates = allDates.filter(function (d) {
-      if (changed && d < today) return false;
-      return !dupDate(d, person.id, enr.id);   // an exact duplicate (same member, same day) is skipped
+    var allDates = gen ? (mode ? repDates() : genDates(form)) : [], pairs = [];
+    allDates.forEach(function (d) { rows.forEach(function (r) { if (r.day === parse(d).getDay()) pairs.push({ d: d, r: r }); }); });
+    var todo = pairs.filter(function (x) {
+      if (changed && x.d < today) return false;
+      return !dupDate(x.d, x.r.memberId, enr.id, delIds);   // an exact duplicate (same member, same day) is skipped
     });
-    var skipped = allDates.length - dates.length;
+    // a lesson that would be deleted and recreated exactly the same stays as it is (adding a family member must not touch the others' lessons)
+    del = del.filter(function (e) {
+      var i = todo.findIndex(function (x) { return x.d === e.date && x.r.memberId === e.memberId && x.r.start === e.start && x.r.end === e.end; });
+      if (i < 0) return true;
+      todo.splice(i, 1); delete delIds[e.id]; return false;
+    });
+    var dates = todo.map(function (x) { return x.d; });
+    var skipped = pairs.length - todo.length;
+    if (del.length && !await ask('수업 다시 만들기', '저장하면 예정 수업 ' + del.length + '개를 지우고 ' + todo.length + '개를 새로 만들어요.' + (keepN ? ' 직접 옮기거나 추가한 수업 ' + keepN + '개는 그대로 둬요.' : '') + ' 사인한 수업은 그대로예요. 계속할까요?', '저장')) {
+      state.members = state.members.filter(function (m) { return addedM.indexOf(m) < 0; });   // cancelled: nothing was saved
+      return;
+    }
+    if (del.length) state.events = state.events.filter(function (x) { return !delIds[x.id]; });
     putEnr(enr);
     var created = [];
-    dates.forEach(function (d) {
-      var t = slotOf(form, parse(d).getDay()), e2 = { id: newId(), title: person.name, memberId: person.id, date: d, start: t.start, end: t.end, memo: '', status: 'scheduled', enrollmentId: enr.id };
+    todo.forEach(function (x) {
+      var who = state.members.find(function (m) { return m.id === x.r.memberId; }) || person;
+      var e2 = { id: newId(), title: who.name, memberId: who.id, date: x.d, start: x.r.start, end: x.r.end, memo: '', status: 'scheduled', enrollmentId: enr.id };
+      if (mode === 'one') e2.manual = true;   // a one-off lesson added from the calendar is not part of the plan
       state.events.push(e2); created.push(e2);
     });
     // a repeat that runs into later months: each lesson belongs to the 신청서 of its own month (existing one, or a new one like the member's others)
@@ -2727,17 +2796,35 @@ body { margin: 0; }
   ['#g-ps', '#g-pe'].forEach(function (s) { $(s).addEventListener('input', function () { eState.periodDirty = true; }); });
   $('#g-start').addEventListener('input', function () {
     var s = $('#g-start').value; if (!s) return;
-    $('#g-end').value = fromMin(toMin(s) + eState.edur); updateEnrHints();
+    $('#g-end').value = fromMin(toMin(s) + eState.edur); retime(); updateEnrHints();
   });
   $('#g-slots').addEventListener('input', function (e) {
-    var row = e.target.closest('.slot'), s = row.querySelector('input').value; if (!s) return;
-    eState.slots[row.getAttribute('data-d')] = { start: s, end: fromMin(toMin(s) + Number(row.querySelector('select').value)) };
+    var row = e.target.closest('.slot'), p = row && eState.plan[Number(row.getAttribute('data-i'))]; if (!p) return;
+    var s = row.querySelector('input').value; if (!s) return;
+    p.start = s; p.end = fromMin(toMin(s) + Number(row.querySelector('select.dur').value)); p.memberId = row.querySelector('select.who').value;
   });
+  function addFamily() {
+    var n = Members.clean($('#g-fam').value);
+    if (!n) return;
+    if (eState.extra.indexOf(n) < 0 && !state.members.some(function (m) { return Members.norm(m.name) === Members.norm(n) && slotPeople().indexOf(m.id) >= 0; })) eState.extra.push(n);
+    renderSlots();
+  }
+  $('#g-slots').addEventListener('click', function (e) {
+    var x = e.target.closest('.slot-x'), add = e.target.closest('.slot-add');
+    if (x) { eState.plan.splice(Number(x.closest('.slot').getAttribute('data-i')), 1); renderSlots(); }
+    else if (add) {
+      var d = Number(add.getAttribute('data-d')), last = eState.plan.filter(function (p) { return p.day === d; }).pop();
+      eState.plan.push({ day: d, start: last ? last.end : $('#g-start').value, end: last ? fromMin(toMin(last.end) + (toMin(last.end) - toMin(last.start))) : $('#g-end').value, memberId: eState.self });
+      renderSlots();
+    } else if (e.target.id === 'g-fam-add') addFamily();
+  });
+  $('#g-slots').addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.id === 'g-fam') { e.preventDefault(); addFamily(); } });
+  $('#g-name').addEventListener('input', renderSlots);
   $('#g-dur').addEventListener('change', function (e) {
     eState.edur = Number(e.target.value);
     var s = $('#g-start').value;
     if (s) $('#g-end').value = fromMin(toMin(s) + eState.edur);
-    updateEnrHints();
+    retime(); updateEnrHints();
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape' || !$('#confm').hidden) return;
@@ -2894,6 +2981,7 @@ body { margin: 0; }
         if (typeof e.memberId === 'string' && e.memberId) o.memberId = e.memberId;
         if (validSign(e.sign)) o.sign = e.sign;
         if (e.noshow === true) o.noshow = true;
+        if (e.manual === true) o.manual = true;
         byId[e.id] = o;
       });
       state.events = Object.keys(byId).map(function (k) { return byId[k]; });

@@ -237,6 +237,15 @@
     return a && b ? a + '|' + b : '';
   }
 
+  /* Ids of everyone known in a household (동/호): members with a 신청서 of it in any month, plus members whose lessons sit on such a 신청서. */
+  function householdMemberIds(d, dong, ho) {
+    var key = householdOf(dong, ho), inHh = {}, ids = {};
+    if (!key) return [];
+    d.enrollments.forEach(function (e) { if (householdOf(e.dong, e.ho) === key) { inHh[e.id] = true; if (e.memberId) ids[e.memberId] = true; } });
+    d.events.forEach(function (e) { if (e.memberId && inHh[e.enrollmentId]) ids[e.memberId] = true; });
+    return Object.keys(ids);
+  }
+
   /* Names of the OTHER members of this 신청서's household (display only, computed from the current records, never stored):
      everyone with a 신청서 of that household in any month, plus members whose lessons sit on such a 신청서 (a shared family 신청서). */
   function familyNames(d, enr) {
@@ -312,6 +321,17 @@
     });
     return sortPlan(plan);
   }
+  /* Which future lessons a plan change may delete and regenerate: unsigned (scheduled), today or later, of this 신청서 and of the given members,
+     made by the plan (same weekday, member and start as a row of the OLD plan) and never moved/added by hand (manual). Everything else is kept. */
+  function regenSplit(events, enrId, memberIds, oldPlan, today) {
+    var rows = {}, del = [], keep = [];
+    oldPlan.forEach(function (p) { rows[p.day + '|' + p.memberId + '|' + p.start] = 1; });
+    events.forEach(function (e) {
+      if (e.enrollmentId !== enrId || e.status !== 'scheduled' || e.date < today || !memberIds[e.memberId]) return;
+      (e.manual || !rows[dayOf(e.date) + '|' + e.memberId + '|' + e.start] ? keep : del).push(e);
+    });
+    return { del: del, keep: keep };
+  }
   // days/start/end/slots (the pre-plan fields) for a plan: per weekday the 신청서's own member's row, else the earliest; start/end = the first weekday's time
   function legacyFields(plan, mainId) {
     if (!plan || !plan.length) return null;
@@ -336,7 +356,7 @@
     return { day: best.day, start: best.start, end: end };
   }
 
-  var api = { cleanMember: cleanMember, captureSeal: captureSeal, backfillSeals: backfillSeals, householdOf: householdOf, familyNames: familyNames, representative: representative, cleanPlan: cleanPlan, planFromSlots: planFromSlots, planFromLessons: planFromLessons, syncPlan: syncPlan, legacyFields: legacyFields, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
+  var api = { cleanMember: cleanMember, captureSeal: captureSeal, backfillSeals: backfillSeals, householdOf: householdOf, householdMemberIds: householdMemberIds, familyNames: familyNames, representative: representative, cleanPlan: cleanPlan, planFromSlots: planFromSlots, planFromLessons: planFromLessons, syncPlan: syncPlan, regenSplit: regenSplit, legacyFields: legacyFields, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
   root.Members = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

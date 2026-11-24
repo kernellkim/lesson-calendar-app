@@ -847,6 +847,8 @@ body { margin: 0; }
     if (typeof e.memberId === 'string' && e.memberId) o.memberId = e.memberId;
     var sl = cleanSlots(e.slots);
     if (sl) o.slots = sl;
+    var pl = Members.cleanPlan(e.plan);   // weekly plan with family members (optional; an older app drops it, syncedEnr rebuilds it from the lessons)
+    if (pl) o.plan = pl;
     // resident confirmation signature (optional): the count and fee shown when it was signed
     if (validSign(e.confirm)) { o.confirm = e.confirm; o.confirmCount = Number(e.confirmCount) || 0; o.confirmFee = Number(e.confirmFee) || 0; }
     return o;
@@ -939,7 +941,7 @@ body { margin: 0; }
     $('#btn-pushnow').disabled = Backup.status(sy) === 'saving';
   }
   function markDirty() { syn('edit'); pushSoon(); }
-  function blob() { return { app: 'lesson-calendar', version: 3, events: state.events, enrollments: state.enrollments, members: state.members, settings: state.settings }; }
+  function blob() { return { app: 'lesson-calendar', version: 4, events: state.events, enrollments: state.enrollments, members: state.members, settings: state.settings }; }
   async function sb(path, opt, token) {
     opt = opt || {};
     opt.headers = Object.assign({ apikey: SB_KEY, 'Content-Type': 'application/json', Authorization: 'Bearer ' + (token || SB_KEY) }, opt.headers);
@@ -2001,25 +2003,21 @@ body { margin: 0; }
     var same = state.enrollments.filter(function (e) { return e.month === enr.month && memberOf(e) === memberOf(enr); }).length;
     return lessonsFor(enr).filter(function (l) { return l.enrollmentId || same === 1; });
   }
-  // Returns the synced copy of enr, or null when nothing changes
+  // Returns the synced copy of enr, or null when nothing changes.
+  // The weekly plan (days, times, which family member) follows the lessons (Members.syncPlan); days/start/end/slots are written from it for older apps.
   function syncedEnr(enr) {
     var all = syncLessons(enr);
-    if (!all.length) return null;
-    var today = ymd(new Date());
-    var up = all.filter(function (l) { return l.status === 'scheduled' && l.date >= today; });
-    var src = up.length ? up : all, first = {};
-    src.forEach(function (l) { var d = parse(l.date).getDay(); if (!first[d]) first[d] = l; });
-    var days = Object.keys(first).map(Number).sort(function (a, b) { return a - b; });
-    var base = src[0], slots = {}, n = 0;
-    days.forEach(function (d) {
-      var l = first[d];
-      if (l.start !== base.start || l.end !== base.end) { slots[d] = { start: l.start, end: l.end }; n++; }
-    });
+    var plan = Members.syncPlan(enr, all, ymd(new Date()));
+    var next = Object.assign({}, enr);
+    if (plan.length) next.plan = plan;
+    if (all.length && plan.length) {   // without lessons the old fields are left as typed
+      var lf = Members.legacyFields(plan, enr.memberId);
+      next.days = lf.days; next.start = lf.start; next.end = lf.end;
+      if (lf.slots) next.slots = lf.slots; else delete next.slots;
+    }
     var inMonth = all.filter(function (l) { return l.date.slice(0, 7) === enr.month; });
-    var next = Object.assign({}, enr, { days: days, start: base.start, end: base.end });
-    if (n) next.slots = slots; else delete next.slots;
     if (inMonth.length) { next.periodStart = inMonth[0].date; next.periodEnd = inMonth[inMonth.length - 1].date; }
-    var key = function (e) { return JSON.stringify([e.days, e.start, e.end, e.slots || null, e.periodStart, e.periodEnd]); };
+    var key = function (e) { return JSON.stringify([e.days, e.start, e.end, e.slots || null, e.periodStart, e.periodEnd, e.plan || null]); };
     return key(next) === key(enr) ? null : next;
   }
   function syncEnrFromLessons(id) {
@@ -2869,7 +2867,7 @@ body { margin: 0; }
   function closeBackup() { $('#backup').hidden = true; document.body.classList.remove('locked'); }
   async function exportBackup() {
     var name = 'lesson-calendar-' + ymd(new Date()) + '.json';
-    var text = JSON.stringify({ app: 'lesson-calendar', version: 3, exportedAt: new Date().toISOString(), events: state.events, enrollments: state.enrollments, members: state.members, settings: state.settings }, null, 2);
+    var text = JSON.stringify({ app: 'lesson-calendar', version: 4, exportedAt: new Date().toISOString(), events: state.events, enrollments: state.enrollments, members: state.members, settings: state.settings }, null, 2);
     var file = new File([text], name, { type: 'application/json' });
     try {
       if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); backupMsg('공유 창에서 저장할 위치를 골라 주세요.', true); return; }

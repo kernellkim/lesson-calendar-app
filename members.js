@@ -138,7 +138,10 @@
     var from = d.members.filter(function (m) { return m.id === fromId; })[0], to = d.members.filter(function (m) { return m.id === toId; })[0];
     if (from && to && typeof from.seal === 'string' && from.seal && (!to.seal || (from.sealAt && (!to.sealAt || from.sealAt < to.sealAt)))) { to.seal = from.seal; to.sealAt = from.sealAt; }
     d.events.forEach(function (e) { if (e.memberId === fromId) e.memberId = toId; });
-    d.enrollments.forEach(function (e) { if (e.memberId === fromId) e.memberId = toId; });
+    d.enrollments.forEach(function (e) {
+      if (e.memberId === fromId) e.memberId = toId;
+      (e.plan || []).forEach(function (p) { if (p.memberId === fromId) p.memberId = toId; });
+    });
     d.members = d.members.filter(function (m) { return m.id !== fromId; });
     delete d.colors['m:' + fromId];
     applyNames(d);
@@ -250,6 +253,75 @@
   /* The one weekday/time shown for a member: among `lessons` count each (weekday, start) pair and take the most frequent.
      Ties: the earlier weekday in the week (weekStart = first day, 0 Sunday / 1 Monday), then the earlier time.
      Returns { day, start, end } (end = the pair's most common end), or null without lessons. Pure: lessons need { date: "YYYY-MM-DD", start, end }. */
+  /* ---- plan: one 신청서's weekly schedule, [{ day, start, end, memberId }]; one weekday may have several rows (family members at different times).
+     Old data has only days/start/end/slots: planFromSlots reads that (every row belongs to the 신청서's own member).
+     days/start/end/slots stay written alongside (legacyFields) so an older app still shows the right weekdays and times. */
+  var TIME = /^\d{2}:\d{2}$/;
+  var dayOf = function (date) { var p = date.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).getDay(); };
+  function sortPlan(pl) { return pl.slice().sort(function (a, b) { return a.day - b.day || (a.start < b.start ? -1 : a.start > b.start ? 1 : 0) || (a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0); }); }
+  function cleanPlan(pl) {
+    var out = (Array.isArray(pl) ? pl : []).filter(function (p) {
+      return p && p.day >= 0 && p.day <= 6 && p.day === Math.floor(p.day) && TIME.test(p.start || '') && TIME.test(p.end || '') && typeof p.memberId === 'string' && p.memberId;
+    }).map(function (p) { return { day: p.day, start: p.start, end: p.end, memberId: p.memberId }; });
+    return out.length ? sortPlan(out) : null;
+  }
+  function planFromSlots(enr) {
+    return (enr.days || []).map(function (day) {
+      var t = (enr.slots && enr.slots[day]) || { start: enr.start, end: enr.end };
+      return { day: day, start: t.start, end: t.end, memberId: enr.memberId || '' };
+    });
+  }
+  // Pattern of a month's lessons: per (weekday, member) the time of the latest time group that happened at least twice. One-off lessons are not a pattern.
+  function planFromLessons(lessons) {
+    var g = {}, order = [], best = {};
+    lessons.forEach(function (l) {
+      if (!l.memberId || l.status === 'cancelled') return;
+      var day = dayOf(l.date), k = day + '|' + l.memberId + '|' + l.start + '|' + l.end;
+      if (!g[k]) { g[k] = { day: day, memberId: l.memberId, start: l.start, end: l.end, n: 0, last: '' }; order.push(k); }
+      g[k].n++; if (l.date > g[k].last) g[k].last = l.date;
+    });
+    order.map(function (k) { return g[k]; }).filter(function (x) { return x.n >= 2; }).forEach(function (x) {
+      var k = x.day + '|' + x.memberId, b = best[k];
+      if (!b || x.last > b.last || (x.last === b.last && x.n > b.n)) best[k] = x;
+    });
+    return sortPlan(Object.keys(best).map(function (k) { var x = best[k]; return { day: x.day, start: x.start, end: x.end, memberId: x.memberId }; }));
+  }
+  /* The plan to store for an enrollment. No plan yet (first migration, or an older app stripped it): the lessons' pattern, plus the old slots
+     for weekdays the lessons do not show. With a plan the plan is the owner's setting and is never rebuilt, added to or shortened from the lessons.
+     The one exception: a row's time follows the calendar when ALL remaining scheduled lessons (today or later, in the 신청서's month, at least 2) of
+     that (weekday, member) were moved to the same new time. One edited lesson (a makeup, a date change) never changes the plan. lessons = this 신청서's lessons. */
+  function syncPlan(enr, lessons, today) {
+    var cur = cleanPlan(enr.plan), key = function (p) { return p.day + '|' + p.memberId; };
+    if (!cur) {
+      var fresh = planFromLessons(lessons), covered = {};
+      fresh.forEach(function (p) { covered[p.day] = 1; });
+      return sortPlan(fresh.concat(planFromSlots(enr).filter(function (p) { return p.memberId && !covered[p.day]; })));
+    }
+    var plan = cur.map(function (p) { return Object.assign({}, p); }), cnt = {}, left = {};
+    plan.forEach(function (p) { cnt[key(p)] = (cnt[key(p)] || 0) + 1; });
+    lessons.forEach(function (l) {
+      if (l.status !== 'scheduled' || l.date < today || l.date.slice(0, 7) !== enr.month || !l.memberId) return;
+      var k = dayOf(l.date) + '|' + l.memberId;
+      (left[k] = left[k] || []).push(l);
+    });
+    plan.forEach(function (p) {
+      var ls = left[key(p)];
+      if (cnt[key(p)] !== 1 || !ls || ls.length < 2) return;
+      var t = ls[0];
+      if (ls.every(function (l) { return l.start === t.start && l.end === t.end; })) { p.start = t.start; p.end = t.end; }
+    });
+    return sortPlan(plan);
+  }
+  // days/start/end/slots (the pre-plan fields) for a plan: per weekday the 신청서's own member's row, else the earliest; start/end = the first weekday's time
+  function legacyFields(plan, mainId) {
+    if (!plan || !plan.length) return null;
+    var pick = {};
+    sortPlan(plan).forEach(function (p) { var c = pick[p.day]; if (!c || (p.memberId === mainId && c.memberId !== mainId)) pick[p.day] = p; });
+    var days = Object.keys(pick).map(Number).sort(function (a, b) { return a - b; }), base = pick[days[0]], slots = {}, n = 0;
+    days.forEach(function (d) { var p = pick[d]; if (p.start !== base.start || p.end !== base.end) { slots[d] = { start: p.start, end: p.end }; n++; } });
+    return { days: days, start: base.start, end: base.end, slots: n ? slots : null };
+  }
+
   function representative(lessons, weekStart) {
     var pairs = {}, order = [];
     lessons.forEach(function (l) {
@@ -264,7 +336,7 @@
     return { day: best.day, start: best.start, end: end };
   }
 
-  var api = { cleanMember: cleanMember, captureSeal: captureSeal, backfillSeals: backfillSeals, householdOf: householdOf, familyNames: familyNames, representative: representative, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
+  var api = { cleanMember: cleanMember, captureSeal: captureSeal, backfillSeals: backfillSeals, householdOf: householdOf, familyNames: familyNames, representative: representative, cleanPlan: cleanPlan, planFromSlots: planFromSlots, planFromLessons: planFromLessons, syncPlan: syncPlan, legacyFields: legacyFields, dedupe: dedupe, ensureEnrollments: ensureEnrollments, moveLessons: moveLessons, clean: clean, norm: norm, migrate: migrate, applyNames: applyNames, ensure: ensure, rename: rename, merge: merge, lessonCount: lessonCount };
   root.Members = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

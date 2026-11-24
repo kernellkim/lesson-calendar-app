@@ -256,3 +256,48 @@ console.log('OK members');
   M.rename(r, 'a', '새'); M.migrate(r); assert.strictEqual(r.members[0].seal, 'M1 1');
   console.log('OK seal');
 }
+
+// ---- plan (weekly schedule with family members)
+{
+  const L = (date, start, memberId, extra) => Object.assign({ id: date + start + memberId, date, start, end: String(+start.slice(0, 2)).padStart(2, '0') + ':50', memberId, status: 'done' }, extra);
+  // 2026-11: Tue 최(a) 09:00 x3, Tue 임(b) 10:00 x2, Fri b 10:00 x3, Wed b 11:00 once (one-off), Thu a 10:00 once
+  const lessons = [L('2026-11-03', '09:00', 'a'), L('2026-11-10', '09:00', 'a'), L('2026-11-17', '09:00', 'a'), L('2026-11-03', '10:00', 'b'), L('2026-11-17', '10:00', 'b'),
+    L('2026-11-06', '10:00', 'b'), L('2026-11-13', '10:00', 'b'), L('2026-11-20', '10:00', 'b'), L('2026-11-11', '11:00', 'b'), L('2026-11-26', '10:00', 'a')];
+  const p = M.planFromLessons(lessons);
+  assert.deepStrictEqual(p.map((x) => [x.day, x.start, x.memberId]), [[2, '09:00', 'a'], [2, '10:00', 'b'], [5, '10:00', 'b']], 'pattern: one-offs excluded, two members on one weekday');
+  // old enrollment (no plan): lessons pattern + old slots for weekdays the lessons do not show (Thu from slots)
+  const enr = { id: 'e', memberId: 'a', days: [4, 5], start: '10:00', end: '10:50' };
+  const mig = M.syncPlan(enr, lessons, '2026-11-24');
+  assert.deepStrictEqual(mig.map((x) => [x.day, x.start, x.memberId]), [[2, '09:00', 'a'], [2, '10:00', 'b'], [4, '10:00', 'a'], [5, '10:00', 'b']], 'migration fills Thu from old slots');
+  // old slots format -> plan
+  assert.deepStrictEqual(M.planFromSlots({ memberId: 'a', days: [2, 3], start: '09:00', end: '09:50', slots: { 3: { start: '14:00', end: '14:50' } } }),
+    [{ day: 2, start: '09:00', end: '09:50', memberId: 'a' }, { day: 3, start: '14:00', end: '14:50', memberId: 'a' }]);
+  // idempotent, rows never removed, an existing plan is never rebuilt
+  const e2 = Object.assign({}, enr, { plan: mig });
+  assert.deepStrictEqual(M.syncPlan(e2, lessons, '2026-11-24'), mig, 'second run changes nothing');
+  assert.deepStrictEqual(M.syncPlan(e2, [], '2026-11-24'), mig, 'no lessons: plan kept');
+  const owner = [{ day: 3, start: '14:00', end: '14:50', memberId: 'a' }];
+  assert.deepStrictEqual(M.syncPlan(Object.assign({}, enr, { plan: owner }), lessons, '2026-11-24'), owner, 'plan is not rebuilt or extended from lessons');
+  // ONE moved scheduled lesson (makeup / date or time change) must not change the plan
+  const S = (date, start, memberId) => L(date, start, memberId, { status: 'scheduled' });
+  const fri = (dates, start) => dates.map((d) => S(d, start, 'b'));
+  const e3 = Object.assign({}, enr, { month: '2026-11', plan: mig });
+  const friRow = (pl) => pl.filter((x) => x.day === 5)[0].start;
+  assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-11-27'], '12:00'), '2026-11-24')), '10:00', 'a single remaining lesson at another time: plan stays');
+  assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-11-27'], '10:00').concat(fri(['2026-11-25'], '12:00')), '2026-11-24')), '10:00', 'one of several moved: plan stays');
+  const mixed = fri(['2026-11-27'], '12:00').concat(fri(['2026-11-30'], '10:00'));   // two remaining Fridays, different times
+  assert.strictEqual(friRow(M.syncPlan(e3, mixed, '2026-11-24')), '10:00', 'remaining lessons disagree: plan stays');
+  // ALL remaining scheduled lessons of that weekday+member moved to the same time: the row follows
+  assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-11-13', '2026-11-20'], '12:00'), '2026-11-06')), '12:00', 'all remaining moved together: plan follows');
+  // lessons of other months, signed/past lessons and other members do not count
+  assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-12-04', '2026-12-11'], '12:00'), '2026-11-24')), '10:00', 'other month: ignored');
+  assert.strictEqual(friRow(M.syncPlan(e3, fri(['2026-11-13', '2026-11-20'], '12:00'), '2026-11-24')), '10:00', 'past lessons: ignored');
+  // legacy fields for older apps
+  const lf = M.legacyFields(mig, 'a');
+  assert.deepStrictEqual([lf.days, lf.start, lf.slots], [[2, 4, 5], '09:00', { 4: { start: '10:00', end: '10:50' }, 5: { start: '10:00', end: '10:50' } }]);
+  // clean / merge
+  assert.strictEqual(M.cleanPlan([{ day: 9, start: '10:00', end: '10:50', memberId: 'a' }, { day: 1, start: 'x', end: '10:50', memberId: 'a' }]), null);
+  const md = { members: [{ id: 'a', name: 'a' }, { id: 'b', name: 'b' }], events: [], colors: {}, enrollments: [{ id: 'e', memberId: 'a', plan: [{ day: 1, start: '10:00', end: '10:50', memberId: 'b' }] }] };
+  M.merge(md, 'b', 'a'); assert.strictEqual(md.enrollments[0].plan[0].memberId, 'a');
+  console.log('OK plan');
+}

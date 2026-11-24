@@ -292,6 +292,8 @@ body { margin: 0; }
 .linkbtn { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; margin-block: -14px; justify-content: center; background: none; border: 0; padding: 0;   /* 44px tap area without making the line taller */
   color: var(--accent-text); font-size: calc(var(--u) * 0.75); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .htabs { display: flex; gap: calc(var(--u) * 0.5); overflow-x: auto; margin-top: calc(var(--u) * 0.5); }
+.mc { display: flex; flex-direction: column; gap: calc(var(--u) * 0.375); border: 1px solid var(--border); border-radius: calc(var(--u) * 0.375); padding: calc(var(--u) * 0.625); margin-bottom: calc(var(--u) * 0.5); }
+.mc .btn { height: auto; white-space: normal; text-align: left; justify-content: flex-start; }
 .hrow { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 0.5); margin-top: calc(var(--u) * 0.5); }
 .help { margin: 0; font-size: calc(var(--u) * 0.8125); color: var(--text-muted); }
 .stack { display: flex; flex-direction: column; gap: calc(var(--u) * 0.5); }
@@ -730,12 +732,26 @@ body { margin: 0; }
   </div>
 </div>
 
+<div class="scrim" id="mcf" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="mcf-title">
+    <div class="grab"></div>
+    <h2 id="mcf-title">두 기기에서 다르게 바꿨어요</h2>
+    <p class="help" id="mcf-sub"></p>
+    <div id="mcf-list"></div>
+    <div class="actions">
+      <button type="button" class="btn" id="mcf-later">나중에</button>
+      <button type="button" class="btn primary" id="mcf-ok">적용하고 저장</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" hidden></div>
 <div class="toast upd" id="upd" role="status" hidden><span>새 버전이 있어요.</span><button type="button" id="upd-reload">새로고침</button></div>
 
 <script src="holidays.js"></script>
 <script src="members.js"></script>
 <script src="backup.js"></script>
+<script src="merge.js"></script>
 <script>
 (function () {
   'use strict';
@@ -934,26 +950,38 @@ body { margin: 0; }
   }
 
   /* ---------- cloud (Supabase REST, no library): whole data set = one row per user ---------- */
-  // ponytail: last-write-wins on the whole blob; add per-row sync only if two devices edit at once.
+  // Two devices: a conditional write; when the cloud moved on, a 3-way merge (merge.js) by item and field, and a popup only for real clashes (see mergeCloud).
   var SB = 'https://yxeyfcuxwmnjjctllwjc.supabase.co', SB_KEY = 'sb_publishable_QrFHUHo3OVEcQF3NrwvF_w_rHbhct7S';
   var LS_A = 'lesson-calendar-auth-v1', LS_SYNC = 'lesson-calendar-lastsync-v1', LS_DIRTY = 'lesson-calendar-dirty-v1', LS_PEND = 'lesson-calendar-pushing-v1';
   var sess = loadJSON(LS_A, null), pushTimer = null, retryTimer = null, retryN = 0, cloudCounts = null;
   var launching = !!sess;   // no push until cloudStart has looked at the cloud copy, so a stale phone never overwrites a newer cloud
   // One sync state (backup.js); every status text comes from renderSync()
   var sy = Backup.init({ loggedIn: !!sess, dirty: lsGet(LS_DIRTY) === '1', lastBackupAt: lsGet(LS_SYNC) });
+  /* Merge base: the cloud data this device last agreed on, stored as { at, data } and trusted only while `at` is this device's lastBackupAt (Backup.baseFor).
+     Written together with lastBackupAt on every path where local and cloud become equal (syn 'ok' / 'clean'); not part of the backup file or cloud payload. */
+  var LS_BASE = 'lesson-calendar-base-v1', LS_LATER = 'lesson-calendar-later-v1', mergeTries = 0;
+  /* "나중에": clashes left undecided. laterN = how many (kept in localStorage so it survives a restart). While it is > 0 every push is a partial push (pendingPush):
+     everything that is not in a clash is uploaded, a clashing field keeps the cloud's value in the upload and this device's choice stays here. */
+  var laterN = Number(lsGet(LS_LATER)) || 0;
+  function setLater(n) { laterN = n; try { if (n) localStorage.setItem(LS_LATER, String(n)); else localStorage.removeItem(LS_LATER); } catch (e) {} renderSync(); }
   function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
-  function syn(ev, a, b) {
+  function loadBase() { try { return Backup.baseFor(JSON.parse(localStorage.getItem(LS_BASE) || 'null'), sy.lastBackupAt); } catch (e) { return null; } }
+  function writeBase(at, data) {
+    try { localStorage.removeItem(LS_BASE); localStorage.setItem(LS_BASE, JSON.stringify({ at: at, data: data })); }
+    catch (e) { try { localStorage.removeItem(LS_BASE); } catch (e2) {} }   // no room: no base, the old dialog is the fallback
+  }
+  function syn(ev, a, b, data) {   // data = the cloud copy this device now equals (ok / clean): becomes the merge base, written before lastBackupAt
     sy = Backup.next(sy, ev, a, b);
     try {
       localStorage.setItem(LS_DIRTY, sy.dirty ? '1' : '0');
-      if (ev === 'ok' || ev === 'clean') { localStorage.setItem(LS_SYNC, sy.lastBackupAt); localStorage.removeItem(LS_PEND); }
+      if (ev === 'ok' || ev === 'clean') { if (data) writeBase(sy.lastBackupAt, data); localStorage.setItem(LS_SYNC, sy.lastBackupAt); localStorage.removeItem(LS_PEND); }
     } catch (e) {}
     renderSync();
   }
   function renderSync() {
     var el = $('#sync'); if (!el) return;
-    el.textContent = Backup.text(sy);
-    el.classList.toggle('tap', Backup.status(sy) !== 'saved');
+    el.textContent = laterN ? '다르게 바꾼 ' + laterN + '건 · 탭해서 정하기' : Backup.text(sy);
+    el.classList.toggle('tap', laterN > 0 || Backup.status(sy) !== 'saved');
     var err = $('#cloud-err'); err.textContent = sy.error ? '백업 오류: ' + sy.error : ''; err.hidden = !sy.error;
     var cc = cloudCounts ? '수업 ' + cloudCounts.events + '개 · 신청서 ' + cloudCounts.enrollments + '건' : '아직 확인 전';
     $('#cloud-detail').textContent = '마지막 백업: ' + (Backup.when(sy.lastBackupAt) || '없음') + ' · 이 기기 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건 / 클라우드 ' + cc;
@@ -984,9 +1012,10 @@ body { margin: 0; }
   // Push the whole data set, read the row back and compare time + counts; only then is it "saved". keepalive lets it finish while the app is closing.
   async function push(keepalive, manual) {
     if (!sess || launching || asking || sy.phase === 'saving') return;
+    if (laterN) return pendingPush(keepalive, manual);
     clearTimeout(pushTimer); clearTimeout(retryTimer);
     syn('start');
-    var at = new Date().toISOString(), b = blob(), sent = { at: at, events: b.events.length, enrollments: b.enrollments.length };
+    var at = new Date().toISOString(), b = JSON.parse(JSON.stringify(blob())), sent = { at: at, events: b.events.length, enrollments: b.enrollments.length };
     try {
       var t = await token(); if (!t) throw new Error('로그인이 필요해요');
       var pend = lsGet(LS_PEND);   // an earlier push that may have landed; read before it is replaced below
@@ -994,7 +1023,12 @@ body { margin: 0; }
       var theirs = await cloudWrite(t, b, at, pend, keepalive);
       if (theirs) {   // the cloud has a copy this device has not seen: nothing was written, the user decides
         syn('conflict');
-        var side = await askSide(theirs);
+        var mr = mergeTries < 3 ? await mergeCloud(theirs) : 'fallback';   // two devices changed things: merge by item and field, ask only about real clashes
+        if (mr === 'merged') { mergeTries++; push(false, manual); return; }
+        if (mr === 'later') { pendingPush(false, manual); return; }   // clashes left for later: still upload everything that is not in a clash
+        if (mr === 'stop') return;
+        if (mr === 'busy') { retryTimer = setTimeout(pushIfDirty, 5000); return; }
+        var side = await askSide(theirs);   // no base on this device (or the merge kept failing): the old all-or-nothing dialog
         if (side === 'pull') takeCloud(theirs);
         else if (side === 'push') { keepMine(theirs); push(false, manual); }
         else retryTimer = setTimeout(pushIfDirty, 5000);   // another popup was open
@@ -1005,7 +1039,7 @@ body { margin: 0; }
       if (bad) throw new Error(bad);
       cloudCounts = { events: sent.events, enrollments: sent.enrollments };
       retryN = 0;
-      syn('ok', at);
+      syn('ok', at, undefined, b); mergeTries = 0;
       if (manual) { toast('백업 완료'); histOff = 0; }
       histSave(t, b, at, manual).then(function (saved) { if (saved && (manual || !$('#hist-list').hidden)) histLoad(); });   // refresh the list when it is open   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
@@ -1042,7 +1076,7 @@ body { margin: 0; }
       return useCloud ? 'pull' : 'push';
     } finally { $('#confm-no').textContent = '취소'; asking = false; }
   }
-  /* Before any of this device's data is replaced by the cloud's: a timestamped copy under lesson-calendar-pre-pull-<time> (the newest 5 are kept).
+  /* Before any of this device's data is replaced by the cloud's: a timestamped copy under lesson-calendar-pre-pull-<time> (the newest 3 are kept).
      Returns false when it could not be saved (storage full): the caller must then NOT replace anything. Not part of the backup file or cloud payload. */
   var COPY = 'lesson-calendar-pre-pull-';
   function keepCopy() {
@@ -1053,7 +1087,7 @@ body { margin: 0; }
         try { localStorage.setItem(key, raw); break; }
         catch (e) { var old = copies(); if (!old.length) return false; localStorage.removeItem(old[0]); }   // full: drop the oldest copy and try again
       }
-      copies().slice(0, -5).forEach(function (k) { localStorage.removeItem(k); });
+      copies().slice(0, -3).forEach(function (k) { localStorage.removeItem(k); });
       var used = 0; Object.keys(localStorage).forEach(function (k) { used += k.length + (localStorage.getItem(k) || '').length; });
       if (used > 4e6) toast('저장 공간이 거의 찼어요. 백업 파일을 내보내고 정리해 주세요.');   // iOS allows about 5M characters
       return localStorage.getItem(key) === raw;
@@ -1062,12 +1096,91 @@ body { margin: 0; }
   // Replace this device's data with the cloud row, after keeping a copy. False = nothing was changed.
   function takeCloud(row) {
     if (!keepCopy()) { toast('이 기기 데이터를 임시 보관하지 못해서 클라우드 데이터를 가져오지 않았어요'); return false; }
-    adopt(row.data); clearTimeout(pushTimer); syn('clean', row.updated_at);
+    adopt(row.data); clearTimeout(pushTimer); setLater(0); syn('clean', row.updated_at, undefined, row.data);
     toast('클라우드의 최신 데이터로 바꿨어요');
     return true;
   }
   // The user chose this device's data: the cloud's current copy is now the known base, and this device's data is unbacked on top of it
-  function keepMine(row) { syn('clean', row.updated_at); syn('edit'); }
+  function keepMine(row) { setLater(0); syn('clean', row.updated_at, undefined, row.data); syn('edit'); }
+  // Same shape for base / mine / theirs before merging (the app cleans enrollments and members on load, a cloud copy may not be)
+  function normData(d) {
+    return { events: (d.events || []).filter(validEvent), enrollments: (d.enrollments || []).filter(validEnr).map(cleanEnr), members: (d.members || []).filter(validMember).map(cleanMember), settings: d.settings || {} };
+  }
+  function askConflicts(list) {
+    var box = $('#mcf-list'), pick = list.map(function (c) { return c.def; });
+    $('#mcf-sub').textContent = list.length + '건은 두 기기에서 다르게 바꿨어요. 나머지는 자동으로 합쳤어요. 고른 쪽으로 합쳐요.';
+    function draw() {
+      box.innerHTML = list.map(function (c, i) {
+        return '<div class="mc"><b>' + esc(c.label) + '</b><span class="help">' + esc(c.field) + '</span>' + ['mine', 'theirs'].map(function (s) {
+          return '<button type="button" class="btn' + (pick[i] === s ? ' primary' : '') + '" data-i="' + i + '" data-s="' + s + '">' + (s === 'mine' ? '이 기기: ' : '다른 기기: ') + esc(c[s]) + '</button>';
+        }).join('') + '</div>';
+      }).join('');
+    }
+    draw(); $('#mcf').hidden = false;
+    return new Promise(function (resolve) {
+      function done(v) { $('#mcf').hidden = true; box.onclick = $('#mcf-ok').onclick = $('#mcf-later').onclick = null; resolve(v); }
+      box.onclick = function (e) { var b = e.target.closest('[data-i]'); if (b) { pick[b.dataset.i] = b.dataset.s; draw(); } };
+      $('#mcf-ok').onclick = function () { list.forEach(function (c, i) { c.set(pick[i]); }); done(true); };
+      $('#mcf-later').onclick = function () { done(false); };
+    });
+  }
+  /* Partial push while clashes are pending. Local data keeps this device's choice for every clash (plus the cloud's other changes); the upload is the same
+     merge with every clash set to the cloud's value. The base stays the old common ancestor (only re-stamped), so the clashes keep showing up until they are decided. */
+  async function pendingPush(keepalive, manual) {
+    clearTimeout(pushTimer); clearTimeout(retryTimer);
+    syn('start');
+    try {
+      var t = await token(); if (!t) throw new Error('로그인이 필요해요');
+      var url = '/rest/v1/lesson_calendar_backup', row = (await sb(url + '?select=data,updated_at', {}, t))[0], base = loadBase();
+      if (!row || !base) { setLater(0); syn('conflict'); if (sy.dirty) push(false, manual); return; }   // nothing to compare with: back to the normal path
+      var bd = normData(base), mine = normData(blob()), theirs = normData(row.data);
+      var keep = Merge.merge(bd, mine, theirs), up = Merge.merge(bd, mine, theirs);
+      keep.conflicts.forEach(function (c) { c.set('mine'); });
+      up.conflicts.forEach(function (c) { c.set('theirs'); });
+      if (!keep.conflicts.length) { setLater(0); syn('conflict'); push(false, manual); return; }   // the clashes are gone
+      if (Date.parse(row.updated_at) !== Date.parse(sy.lastBackupAt)) {   // the cloud moved on: take its other changes into this device first
+        if (!keepCopy()) throw new Error('이 기기 데이터를 임시 보관하지 못했어요');
+        adopt(keep.data); clearTimeout(pushTimer); syn('start');
+      }
+      setLater(keep.conflicts.length);
+      var at = new Date().toISOString(), out = Object.assign({ app: 'lesson-calendar', version: 4 }, up.data);
+      try { localStorage.setItem(LS_PEND, at); } catch (e) {}
+      var done = await sb(url + '?select=updated_at&user_id=eq.' + sess.uid + '&updated_at=eq.' + encodeURIComponent(row.updated_at), { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ data: out, updated_at: at }) }, t);
+      if (!done.length) { syn('conflict'); retryTimer = setTimeout(pushIfDirty, 2000); return; }   // the cloud moved again meanwhile: the next try merges again
+      mergeTries = 0;
+      syn('ok', at, undefined, base); syn('edit');   // the base is the old ancestor; this device still differs from the cloud (the pending choices), so it stays "changed"
+    } catch (e) {
+      syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
+      retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
+    }
+  }
+  // The banner was tapped: show the clashes again (against the cloud's current copy) and apply the choices
+  async function resolveLater() {
+    try {
+      var t = await token(), row = (await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t))[0];
+      if (!row) { setLater(0); return; }
+      var mr = await mergeCloud(row, true);
+      if (mr === 'merged') push(false, true);
+      else if (mr === 'later') pendingPush(false, true);
+    } catch (e) { toast('불러오지 못했어요. 잠시 후 다시 눌러 주세요'); }
+  }
+  /* The cloud has a copy this device has not seen. With a base: 3-way merge (keepCopy first), adopt the result, and make the cloud's copy the new base
+     (this device's merged data is then unbacked on top of it, so the caller pushes). Returns 'merged', 'later' (clashes left for later / copy failed), 'busy' (another popup is open) or 'fallback' (no base). */
+  async function mergeCloud(row, force) {
+    var base = loadBase(); if (!base) return 'fallback';
+    if (!$('#confm').hidden || !$('#mcf').hidden) return 'busy';
+    var r = Merge.merge(normData(base), normData(blob()), normData(row.data));
+    if (r.conflicts.length) {
+      asking = true;
+      var ok; try { ok = await askConflicts(r.conflicts); } finally { asking = false; }
+      if (!ok) { setLater(r.conflicts.length); return 'later'; }
+    }
+    if (!keepCopy()) { toast('이 기기 데이터를 임시 보관하지 못해서 합치지 않았어요'); return 'stop'; }
+    adopt(r.data); clearTimeout(pushTimer); setLater(0);
+    syn('clean', row.updated_at, undefined, row.data); syn('edit');
+    toast('다른 기기의 변경을 합쳤어요');
+    return 'merged';
+  }
   // ---- backup history: up to 5 snapshots a day, automatic ones at least 30 minutes apart (the 지금 백업 button ignores the gap). After the 5th, the day's last one is refreshed, so it always holds the day's final backup.
   // The day's last snapshot is kept 30 days; the other ones are deleted after 3 days. Any failure is only logged; the next push retries. ----
   var HIST = '/rest/v1/lesson_calendar_backup_history', DAY = 86400000;
@@ -1171,6 +1284,7 @@ body { margin: 0; }
       var rows = await sb('/rest/v1/lesson_calendar_backup?select=data,updated_at', {}, t), row = rows[0];
       var mine = state.events.length || state.enrollments.length;
       if (row) cloudCounts = { events: (row.data.events || []).length, enrollments: (row.data.enrollments || []).length };
+      if (row && Backup.canBootstrap(!!loadBase(), sy.dirty, row.updated_at, sy.lastBackupAt)) writeBase(row.updated_at, row.data);   // first launch of this version: synced and clean, so the cloud copy is the base
       if (row && firstLogin && mine) {
         var d = row.data;
         if (!keepCopy()) throw new Error('이 기기 데이터를 임시 보관하지 못했어요');
@@ -1178,11 +1292,19 @@ body { margin: 0; }
         keepMine(row); pushAfter = true;   // merged on purpose: the cloud's current copy is the base
       } else {
         var act = Backup.guard({ cloudAt: row && row.updated_at, lastBackupAt: sy.lastBackupAt, dirty: sy.dirty, pendingAt: lsGet(LS_PEND) });
+        if (act === 'ask' && laterN) { act = 'none'; await pendingPush(); }   // clashes still pending: keep uploading the rest, no popup
         if (act === 'ask') {
-          var side = await askSide(row);
-          if (side === 'push') keepMine(row);
-          act = side || 'none';
-          if (!side) retryTimer = setTimeout(function () { cloudStart(); }, 5000);   // another popup was open
+          var mr = await mergeCloud(row);
+          if (mr === 'merged') { act = 'none'; pushAfter = true; }
+          else if (mr === 'later') { act = 'none'; await pendingPush(); }
+          else if (mr === 'stop') act = 'none';
+          else if (mr === 'busy') { act = 'none'; retryTimer = setTimeout(function () { cloudStart(); }, 5000); }
+          else {   // no base on this device: the old all-or-nothing dialog
+            var side = await askSide(row);
+            if (side === 'push') keepMine(row);
+            act = side || 'none';
+            if (!side) retryTimer = setTimeout(function () { cloudStart(); }, 5000);   // another popup was open
+          }
         }
         if (act === 'pull') takeCloud(row);
         else if (act === 'push') pushAfter = true;
@@ -3142,7 +3264,7 @@ body { margin: 0; }
   $('#btn-login').addEventListener('click', auth);
   $('#btn-logout').addEventListener('click', function () { setSess(null); });
   $('#btn-pushnow').addEventListener('click', function () { push(false, true); });
-  $('#sync').addEventListener('click', function () { if (!sess) openBackup(); else if (sy.phase !== 'saving' && Backup.status(sy) !== 'saved') push(); });
+  $('#sync').addEventListener('click', function () { if (!sess) openBackup(); else if (laterN) resolveLater(); else if (sy.phase !== 'saving' && Backup.status(sy) !== 'saved') push(); });
   $('#btn-export').addEventListener('click', exportBackup);
   $('#btn-import').addEventListener('click', function () { $('#file-import').click(); });
   $('#file-import').addEventListener('change', function (e) { var f = e.target.files && e.target.files[0]; if (f) importBackup(f); });

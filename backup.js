@@ -78,7 +78,16 @@
   function stale(dirtySince, now) { return !!dirtySince && ((now || Date.now()) - ms(dirtySince)) > 86400000; }
   // trainer signature in settings: take a valid incoming one, else keep the current valid one, else ''. `valid` is the app's validSign.
   function pickSeal(incoming, current, valid) { return valid(incoming) ? incoming : valid(current) ? current : ''; }
-  var api = { pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, foreign: foreign, verify: verify, stale: stale, when: when };
+  /* The merge base = the cloud data this device last agreed on. It is stored as { at, data } and is only trusted while `at` is exactly
+     this device's lastBackupAt, so a crash between writing the two (or any other mismatch) can never leave a stale base in use: it is ignored and the old dialog runs. */
+  function baseFor(stored, lastBackupAt) {
+    return stored && stored.data && stored.at && lastBackupAt && ms(stored.at) === ms(lastBackupAt) ? stored.data : null;
+  }
+  // No base yet (right after this feature shipped): this device is fully synced when it has no unbacked edits and its last sync is the cloud's current copy
+  function canBootstrap(hasBase, dirty, cloudAt, lastBackupAt) {
+    return !hasBase && !dirty && !!cloudAt && !!lastBackupAt && ms(cloudAt) === ms(lastBackupAt);
+  }
+  var api = { baseFor: baseFor, canBootstrap: canBootstrap, pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, foreign: foreign, verify: verify, stale: stale, when: when };
   root.Backup = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

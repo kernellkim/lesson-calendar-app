@@ -326,6 +326,9 @@ body { margin: 0; }
 #confm-text { white-space: pre-line; }
 /* long names / notes wrap instead of running past the sheet (Korean keeps words together, long strings still break) */
 .panel h2, .panel p, .help, .note, .err, .sname, .sask { overflow-wrap: anywhere; word-break: keep-all; }
+.apm-hol { font-weight: 700; color: var(--accent); }
+#apm summary { min-height: max(44px, calc(var(--u) * 2.75)); display: flex; align-items: center; font-weight: 600; }
+#apm details p { margin: 0 0 calc(var(--u) * 0.25); font-size: calc(var(--u) * 0.875); color: var(--text-muted); }
 .cph { margin: calc(var(--u) * 0.5) 0 0; font-size: calc(var(--u) * 0.9375); font-weight: 700; color: var(--text); }
 .chk { display: flex; align-items: center; gap: calc(var(--u) * 0.625); min-height: max(44px, calc(var(--u) * 2.75)); font-weight: 500; }
 .chk span { min-width: 0; overflow-wrap: anywhere; }
@@ -532,6 +535,19 @@ body { margin: 0; }
     <div class="actions">
       <button type="button" class="btn" id="cpm-cancel">취소</button>
       <button type="button" class="btn primary" id="cpm-ok">복사</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="apm" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="apm-title">
+    <div class="grab"></div>
+    <h2 id="apm-title">달력에 넣기 미리보기</h2>
+    <p class="help" id="apm-sum"></p>
+    <div id="apm-list"></div>
+    <div class="actions">
+      <button type="button" class="btn" id="apm-cancel">취소</button>
+      <button type="button" class="btn primary" id="apm-ok">적용</button>
     </div>
   </div>
 </div>
@@ -2585,21 +2601,97 @@ body { margin: 0; }
     $('#cpm-ok').textContent = '선택한 ' + n + '건 복사'; $('#cpm-ok').disabled = !n;
   }
   function closeCopy() { $('#cpm').hidden = true; }
+  // Copy last month's 신청서 (plan and people included) and put their lessons on the calendar, previewed first; nothing is saved until 적용.
   function doCopy() {
-    var key = monthKey(state.month), b = monthBounds(key), ids = [];
+    var key = monthKey(state.month), b = monthBounds(key), ids = [], today = ymd(new Date());
     document.querySelectorAll('#cpm-list input:checked').forEach(function (i) { ids.push(i.value); });
-    var n = 0;
+    var drafts = [];
     cpSources.forEach(function (e) {
       if (ids.indexOf(e.id) < 0) return;
       if (state.enrollments.some(function (x) { return x.month === key && householdKey(x) === householdKey(e); })) return;
-      state.enrollments.push(Object.assign({}, e, { id: newId(), month: key, periodStart: b[0], periodEnd: b[1], confirm: undefined, confirmCount: undefined, confirmFee: undefined }));
-      n++;
+      var d = Object.assign({}, e, { id: newId(), month: key, periodStart: b[0], periodEnd: b[1], confirm: undefined, confirmCount: undefined, confirmFee: undefined });
+      // the previous plan with its members; only an enrollment without one (before plans existed) is read from its lessons
+      var pl = Members.cleanPlan(e.plan) || Members.cleanPlan(Members.syncPlan(e, lessonsFor(e), today));
+      if (pl) d.plan = pl; else delete d.plan;
+      drafts.push(d);
     });
     closeCopy();
-    if (!n) return;
-    saveEnr(); render();
-    toast(n + '건을 복사했어요. 요일과 횟수를 확인해 주세요');
+    if (drafts.length) openLoadPreview(drafts);
   }
+  var apv = null;   // { drafts, items }
+  // one item per (date, plan row); kind: add | change (a scheduled, non-manual lesson of that member that day at another time) | skip (already there, or signed/done/manual/cancelled-by-hand: never touched)
+  function buildLoad(drafts) {
+    var items = [];
+    drafts.forEach(function (enr) {
+      for (var d = enr.periodStart; d <= enr.periodEnd; d = addDays(d, 1)) {
+        (enr.plan || []).forEach(function (r) {
+          if (r.day !== parse(d).getDay()) return;
+          var m = state.members.find(function (x) { return x.id === r.memberId; });
+          if (!m) return;
+          var it = { enr: enr, r: r, d: d, name: m.name, hol: getHoliday(d), kind: 'add', on: true, why: '' };
+          var same = state.events.filter(function (x) { return x.date === d && x.status !== 'cancelled' && x.memberId === r.memberId; });
+          if (same.some(function (x) { return x.start === r.start && x.end === r.end; })) { it.kind = 'skip'; it.why = '이미 있음'; }
+          else if (same.length) {
+            var t = same.find(function (x) { return x.status === 'scheduled' && !x.manual && !x.sign; });
+            if (t && same.length === 1) { it.kind = 'change'; it.target = t; } else { it.kind = 'skip'; it.why = '사인했거나 직접 만든 수업이 있음'; }
+          }
+          items.push(it);
+        });
+      }
+    });
+    return items;
+  }
+  function loadCounts() {
+    var c = { add: 0, change: 0, skip: 0 };
+    apv.items.forEach(function (i) { if (i.kind === 'skip') c.skip++; else if (i.on) c[i.kind]++; });
+    return c;
+  }
+  function loadSummary() {
+    var c = loadCounts();
+    $('#apm-sum').textContent = '신청서 ' + apv.drafts.length + '건 · 수업 추가 ' + c.add + '개 · 시간 변경 ' + c.change + '개 · 건너뜀 ' + c.skip + '개 (사인했거나 직접 만든 수업은 건드리지 않아요)';
+    $('#apm-ok').textContent = '적용 (추가 ' + c.add + ' · 변경 ' + c.change + ')';
+  }
+  function itemLabel(i) { return mdLabel(i.d) + ' ' + i.r.start + ' ' + i.name; }
+  function openLoadPreview(drafts) {
+    apv = { drafts: drafts, items: buildLoad(drafts) };
+    var tag = function (i) { return esc(i.enr.dong) + '동 ' + esc(i.enr.ho) + '호 ' + esc(itemLabel(i)); };
+    var box = function (i, n) { return '<label class="chk"><input type="checkbox" data-ai="' + n + '"' + (i.on ? ' checked' : '') + '><span>' + tag(i) + (i.hol ? ' <span class="apm-hol">' + esc(i.hol) + '</span>' : '') +
+      (i.kind === 'change' ? ' · ' + esc(i.target.start + '~' + i.target.end) + ' → ' + esc(i.r.start + '~' + i.r.end) : '') + '</span></label>'; };
+    var hol = '', chg = '', per = '';
+    apv.items.forEach(function (i, n) { if (i.kind === 'skip') return; if (i.kind === 'change') chg += box(i, n); else if (i.hol) hol += box(i, n); });
+    apv.drafts.forEach(function (enr) {
+      var mine = apv.items.filter(function (i) { return i.enr === enr; }), names = {};
+      mine.forEach(function (i) { names[i.name] = 1; });
+      per += '<details><summary>' + esc(enr.dong) + '동 ' + esc(enr.ho) + '호 · ' + esc(Object.keys(names).join(', ') || enr.name) + ' · ' + mine.filter(function (i) { return i.kind !== 'skip'; }).length + '개</summary>' +
+        (mine.length ? mine.map(function (i) { return '<p>' + esc(itemLabel(i)) + (i.hol ? ' · ' + esc(i.hol) : '') + (i.kind === 'skip' ? ' · 건너뜀 (' + esc(i.why) + ')' : i.kind === 'change' ? ' · 시간 변경' : '') + '</p>'; }).join('') : '<p>플랜에 요일이 없어 만들 수업이 없어요</p>') + '</details>';
+    });
+    $('#apm-list').innerHTML = (hol ? '<p class="cph">공휴일 수업 (빼려면 체크 해제)</p>' + hol : '') + (chg ? '<p class="cph">이미 있는 예정 수업의 시간 변경</p>' + chg : '') + '<p class="cph">신청서별 수업</p>' + per;
+    loadSummary();
+    $('#apm').hidden = false;
+  }
+  function closeLoad() { $('#apm').hidden = true; apv = null; }
+  function applyLoad() {
+    if (!apv) return;
+    var snap = JSON.parse(JSON.stringify({ events: state.events, enrollments: state.enrollments, members: state.members, colors: state.settings.colors })), c = loadCounts();
+    apv.drafts.forEach(function (enr) { state.enrollments.push(enr); });
+    apv.items.forEach(function (i) {
+      if (!i.on || i.kind === 'skip') return;
+      if (i.kind === 'change') { i.target.start = i.r.start; i.target.end = i.r.end; if (!i.target.enrollmentId) i.target.enrollmentId = i.enr.id; return; }
+      state.events.push({ id: newId(), title: i.name, memberId: i.r.memberId, date: i.d, start: i.r.start, end: i.r.end, memo: '', status: 'scheduled', enrollmentId: i.enr.id });
+    });
+    var drafts = apv.drafts; closeLoad();
+    saveEnr(); saveEvents();
+    drafts.forEach(function (enr) { syncEnrFromLessons(enr.id); });
+    render();
+    undoData = { snap: snap, done: '불러오기를 되돌렸어요' };
+    $('#undo-text').textContent = '신청서 ' + drafts.length + '건 · 수업 ' + c.add + '개를 달력에 넣었어요';
+    $('#undo').hidden = false;
+    clearTimeout(undoTimer); undoTimer = setTimeout(function () { $('#undo').hidden = true; undoData = null; }, 5000);
+  }
+  $('#apm-list').addEventListener('change', function (e) { var n = e.target.getAttribute('data-ai'); if (n == null) return; apv.items[Number(n)].on = e.target.checked; loadSummary(); });
+  $('#apm-cancel').addEventListener('click', closeLoad);
+  $('#apm-ok').addEventListener('click', applyLoad);
+  $('#apm').addEventListener('click', function (e) { if (e.target === $('#apm')) closeLoad(); });
   $('#cpm-list').addEventListener('change', cpCount);
   $('#cpm-cancel').addEventListener('click', closeCopy);
   $('#cpm-ok').addEventListener('click', doCopy);

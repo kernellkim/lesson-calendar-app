@@ -87,7 +87,32 @@
   function canBootstrap(hasBase, dirty, cloudAt, lastBackupAt) {
     return !hasBase && !dirty && !!cloudAt && !!lastBackupAt && ms(cloudAt) === ms(lastBackupAt);
   }
-  var api = { baseFor: baseFor, canBootstrap: canBootstrap, pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, foreign: foreign, verify: verify, stale: stale, when: when };
+  /* Single-flight token refresh. o = { read() -> session|null, write(json) saves the new session, call(refreshToken) -> json, now() }.
+     Parallel callers share one request; the new tokens are written before anyone is handed the access token.
+     "already used" -> re-read the stored session once (another window/call may have saved it); if still unusable, throw an error with .expired = true and never retry. */
+  var USED = /already used|invalid refresh token|refresh_token_not_found/i, EXPIRED = '로그인이 만료됐어요 · 다시 로그인';
+  function refresher(o) {
+    var inflight = null, now = o.now || Date.now;
+    function dead(e) { var x = new Error(EXPIRED); x.expired = true; x.cause = e; return x; }
+    async function run(s) {
+      try { o.write(await o.call(s.refresh)); }
+      catch (e) {
+        if (!USED.test(e.message)) throw e;
+        var s2 = o.read();
+        if (!s2 || s2.refresh === s.refresh) throw dead(e);
+        if (now() <= s2.exp) return s2.access;
+        try { o.write(await o.call(s2.refresh)); } catch (e2) { throw USED.test(e2.message) ? dead(e2) : e2; }
+      }
+      var n = o.read(); return n && n.access;
+    }
+    return async function get() {
+      var s = o.read(); if (!s) return null;
+      if (now() <= s.exp) return s.access;
+      if (!inflight) inflight = run(s).finally(function () { inflight = null; });
+      return inflight;
+    };
+  }
+  var api = { refresher: refresher, EXPIRED: EXPIRED, baseFor: baseFor, canBootstrap: canBootstrap, pickSeal: pickSeal, init: init, next: next, status: status, text: text, guard: guard, foreign: foreign, verify: verify, stale: stale, when: when };
   root.Backup = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

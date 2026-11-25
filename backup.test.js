@@ -89,3 +89,28 @@ console.log('OK backup');
   assert(/function blob\(\)[^\n]*settings: state\.settings/.test(src) && /exportedAt[^\n]*settings: state\.settings/.test(src), 'blob and export carry settings as a whole');
   console.log('OK trainer seal');
 }
+
+// refresher: parallel calls share ONE request; tokens saved before anyone gets them; "already used" never loops
+(async () => {
+  const mk = (call, store) => {
+    const o = { sess: store || { access: 'a0', refresh: 'r0', exp: 0 }, calls: 0 };
+    o.get = B.refresher({ read: () => o.sess, write: (j) => { o.sess = { access: j.access, refresh: j.refresh, exp: Date.now() + 1e6 }; }, call: (r) => { o.calls++; return call(r, o); } });
+    return o;
+  };
+  // 1) five parallel callers -> one request, all get the new token, stored before they resume
+  let a = mk(async (r) => { await new Promise((x) => setTimeout(x, 10)); return { access: 'a1', refresh: 'r1' }; });
+  const got = await Promise.all([1, 2, 3, 4, 5].map(() => a.get()));
+  assert.deepEqual(got, ['a1', 'a1', 'a1', 'a1', 'a1']); assert.equal(a.calls, 1); assert.equal(a.sess.refresh, 'r1');
+  assert.equal(await a.get(), 'a1'); assert.equal(a.calls, 1);   // still valid: no new request
+  // 2) already used, but another window saved a fresh session meanwhile -> use it, no loop
+  let b = mk(async (r, o) => { o.sess = { access: 'a9', refresh: 'r9', exp: Date.now() + 1e6 }; throw new Error('Invalid Refresh Token: Already Used'); });
+  assert.equal(await b.get(), 'a9'); assert.equal(b.calls, 1);
+  // 3) already used and nothing new stored -> expired, exactly one request, repeated calls each try once (caller drops the session)
+  let c = mk(async () => { throw new Error('Invalid Refresh Token: Already Used'); });
+  await assert.rejects(Promise.all([c.get(), c.get(), c.get()]), (e) => e.expired === true && e.message === B.EXPIRED);
+  assert.equal(c.calls, 1);
+  // 4) a network error is not "expired"
+  let d = mk(async () => { throw new TypeError('Failed to fetch'); });
+  await assert.rejects(d.get(), (e) => !e.expired);
+  console.log('refresher ok');
+})().catch((e) => { console.error(e); process.exit(1); });

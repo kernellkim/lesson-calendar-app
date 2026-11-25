@@ -980,8 +980,8 @@ body { margin: 0; }
   }
   function renderSync() {
     var el = $('#sync'); if (!el) return;
-    el.textContent = laterN ? '다르게 바꾼 ' + laterN + '건 · 탭해서 정하기' : Backup.text(sy);
-    el.classList.toggle('tap', laterN > 0 || Backup.status(sy) !== 'saved');
+    el.textContent = laterN ? '다르게 바꾼 ' + laterN + '건 · 탭해서 정하기' : expired && !sess ? Backup.EXPIRED : Backup.text(sy);
+    el.classList.toggle('tap', laterN > 0 || expired || Backup.status(sy) !== 'saved');
     var err = $('#cloud-err'); err.textContent = sy.error ? '백업 오류: ' + sy.error : ''; err.hidden = !sy.error;
     var cc = cloudCounts ? '수업 ' + cloudCounts.events + '개 · 신청서 ' + cloudCounts.enrollments + '건' : '아직 확인 전';
     $('#cloud-detail').textContent = '마지막 백업: ' + (Backup.when(sy.lastBackupAt) || '없음') + ' · 이 기기 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건 / 클라우드 ' + cc;
@@ -998,16 +998,19 @@ body { margin: 0; }
     return j;
   }
   function setSess(j) {
+    if (j && j.access_token) expired = false;
     sess = j && j.access_token ? { access: j.access_token, refresh: j.refresh_token, exp: Date.now() + (j.expires_in - 60) * 1000, uid: j.user.id, email: j.user.email } : null;
     try { if (sess) localStorage.setItem(LS_A, JSON.stringify(sess)); else localStorage.removeItem(LS_A); } catch (e) {}
     if (!!sess !== sy.loggedIn) syn(sess ? 'login' : 'logout');   // a token refresh is not a login
     if (!sess) { clearTimeout(pushTimer); clearTimeout(retryTimer); launching = false; cloudCounts = null; renderSync(); }
     showCloud();
   }
+  // One refresh at a time (Backup.refresher); only the login is dropped when it is dead: local data, dirty flag and merge base stay.
+  var expired = false;
+  var getTok = Backup.refresher({ read: function () { return sess; }, write: setSess, call: function (r) { return sb('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: r }) }); } });
   async function token() {
-    if (!sess) return null;
-    if (Date.now() > sess.exp) setSess(await sb('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: sess.refresh }) }));
-    return sess && sess.access;
+    try { return await getTok(); }
+    catch (e) { if (e.expired && sess) { expired = true; setSess(null); toast(Backup.EXPIRED); } throw e; }
   }
   // Push the whole data set, read the row back and compare time + counts; only then is it "saved". keepalive lets it finish while the app is closing.
   async function push(keepalive, manual) {
@@ -1044,6 +1047,7 @@ body { margin: 0; }
       histSave(t, b, at, manual).then(function (saved) { if (saved && (manual || !$('#hist-list').hidden)) histLoad(); });   // refresh the list when it is open   // not awaited: history can never hold up or fail the normal backup
       if (sy.dirty) pushSoon();   // edited while saving
     } catch (e) {
+      if (e.expired) return;   // login is gone: no retry, data stays dirty
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
       retryTimer = setTimeout(pushIfDirty, [5, 15, 60, 300][Math.min(retryN++, 3)] * 1000);
     }
@@ -1311,6 +1315,7 @@ body { margin: 0; }
       }
       renderSync();
     } catch (e) {
+      if (e.expired) return;
       syn('fail', e.message, !navigator.onLine || e instanceof TypeError);
       retryTimer = setTimeout(function () { cloudStart(); }, 15000);
     } finally { launching = false; }
@@ -1334,7 +1339,7 @@ body { margin: 0; }
         if (!j.access_token) { backupMsg('이메일이나 비밀번호를 확인해 주세요. (새 가입이면 확인 메일을 보냈어요)', true); return; }
       }
       setSess(j); $('#c-pass').value = ''; backupMsg('', true);
-      await cloudStart(true);
+      await cloudStart(!sy.lastBackupAt);   // a device that has synced before goes through the guard/merge, not the first-login union
       $('#backup-count').textContent = '저장된 수업 ' + state.events.length + '개 · 신청서 ' + state.enrollments.length + '건';
     } catch (e) { backupMsg('실패: ' + e.message, false); }
   }

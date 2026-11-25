@@ -2482,8 +2482,8 @@ body { margin: 0; }
     return null;
   }
   // dates that already have a lesson of this member (exact duplicate rule of the 신청서 form)
-  function dupDate(d, personId, enrId, ignore) {   // ignore: ids of lessons about to be deleted
-    return state.events.some(function (x) { return !(ignore && ignore[x.id]) && x.date === d && x.status !== 'cancelled' && memberOf(x) === personId && (!x.enrollmentId || x.enrollmentId === enrId); });
+  function dupDate(d, personId, enrId, ignore, start) {   // ignore: ids of lessons about to be deleted; start: only a lesson at the same start time counts as a duplicate
+    return state.events.some(function (x) { return !(ignore && ignore[x.id]) && x.date === d && (!start || x.start === start) && x.status !== 'cancelled' && memberOf(x) === personId && (!x.enrollmentId || x.enrollmentId === enrId); });
   }
   function updateRepUI() {
     var mode = repMode(), box = $('#g-repeat-box');
@@ -2496,7 +2496,7 @@ body { margin: 0; }
     if (name && ds.length) {
       var md = memberData(); md.members = state.members.slice();
       var p = Members.ensure(md, name, $('#g-dong').value.trim() + '|' + $('#g-ho').value.trim());
-      skip = ds.filter(function (d) { return dupDate(d, p.id, null); }).length;
+      skip = ds.filter(function (d) { return dupDate(d, p.id, null, null, $('#g-start').value); }).length;
     }
     note.textContent = $('#g-rend').value && $('#g-rend').value < eState.date ? '종료일이 시작 날짜보다 빠를 수 없어요.' : (ds.length - skip) + '개 수업이 등록돼요' + (skip ? ' (이미 있는 ' + skip + '개 제외)' : '');
     note.hidden = false;
@@ -2643,7 +2643,7 @@ body { margin: 0; }
     allDates.forEach(function (d) { rows.forEach(function (r) { if (r.day === parse(d).getDay()) pairs.push({ d: d, r: r }); }); });
     var todo = pairs.filter(function (x) {
       if (changed && x.d < today) return false;
-      return !dupDate(x.d, x.r.memberId, enr.id, delIds);   // an exact duplicate (same member, same day) is skipped
+      return !dupDate(x.d, x.r.memberId, enr.id, delIds, mode ? x.r.start : '');   // calendar add: skipped only at the same start time; the 신청서 form keeps one lesson per member per day
     });
     // a lesson that would be deleted and recreated exactly the same stays as it is (adding a family member must not touch the others' lessons)
     del = del.filter(function (e) {
